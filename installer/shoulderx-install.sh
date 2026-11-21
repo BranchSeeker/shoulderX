@@ -51,6 +51,7 @@ PKG_MANAGER=""
 XRAY_ASSET=""
 XRAY_INIT=""
 TMPDIR="/tmp/shoulderx-install.$$"
+SUMS=""
 
 # --- вывод ------------------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -207,6 +208,54 @@ pkg_add() {     # pkg_add <файлы...>
 }
 
 # --- 1. платформа -----------------------------------------------------------
+# Загрузчик и сертификаты: на голой прошивке бывает ни curl, ни ca-bundle.
+# Ставим сами (пакет из фида), прежде чем что-то качать.
+ensure_downloader() {
+	if ! have curl && ! have wget && ! have uclient-fetch; then
+		info "нет curl/wget — ставлю curl из фида"
+		if [ "$DRY" = "0" ]; then
+			if [ "$PKG_MANAGER" = "apk" ]; then
+				apk add curl >/dev/null 2>&1
+			else
+				opkg update >/dev/null 2>&1 || true
+				opkg install curl >/dev/null 2>&1
+			fi
+		fi
+	fi
+
+	if have curl; then
+		ok "загрузка: curl"
+	elif have wget; then
+		ok "загрузка: wget"
+	elif have uclient-fetch; then
+		ok "загрузка: uclient-fetch"
+	else
+		die "нет ни curl, ни wget, ни uclient-fetch — поставьте вручную: $PKG_MANAGER add curl"
+	fi
+
+	if [ ! -f /etc/ssl/certs/ca-certificates.crt ] && [ ! -f /etc/ssl/cert.pem ] && [ ! -d /etc/ssl/certs ]; then
+		info "нет корневых сертификатов — ставлю ca-bundle"
+		if [ "$DRY" = "0" ]; then
+			if [ "$PKG_MANAGER" = "apk" ]; then
+				apk add ca-bundle >/dev/null 2>&1
+			else
+				opkg install ca-bundle >/dev/null 2>&1
+			fi
+		fi
+	fi
+}
+
+# Проверка сети до релиза: один раз тянем SHA256SUMS (он всё равно нужен),
+# и сразу понимаем, проходит ли TLS и доступен ли GitHub/зеркало.
+preflight_net() {
+	SUMS=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
+	if [ -n "$SUMS" ]; then
+		ok "релиз доступен (SHA256SUMS получен)"
+	else
+		warn "не удалось получить SHA256SUMS — проверьте сеть/зеркало (--mirror=)"
+	fi
+}
+
 detect_platform() {
 	step "Проверяю платформу"
 
@@ -232,15 +281,7 @@ detect_platform() {
 	fi
 	ok "пакеты: $PKG_MANAGER"
 
-	if have curl; then
-		ok "загрузка: curl"
-	elif have wget; then
-		ok "загрузка: wget"
-	elif have uclient-fetch; then
-		ok "загрузка: uclient-fetch"
-	else
-		die "нужен curl, wget или uclient-fetch"
-	fi
+	ensure_downloader
 
 	year=$(date +%Y 2>/dev/null || echo 0)
 	case "$year" in
@@ -399,8 +440,9 @@ install_packages() {
 
 	if [ "$PKG_MANAGER" = "apk" ]; then ext="apk"; else ext="ipk"; fi
 
-	sums=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
-	[ -n "$sums" ] || die "не смог получить SHA256SUMS из последнего релиза (нет сети?)"
+	sums="${SUMS:-}"
+	[ -n "$sums" ] || sums=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
+	[ -n "$sums" ] || die "не смог получить SHA256SUMS из последнего релиза (нет сети? попробуйте --mirror=)"
 
 	files=$(printf '%s\n' "$sums" | awk -v e="$ext" '$2 ~ ("\\." e "$") {print $2}')
 	[ -n "$files" ] || die "в релизе нет пакетов .$ext"
@@ -558,6 +600,7 @@ for arg in "$@"; do
 done
 
 detect_platform
+preflight_net
 [ "$DRY" = "1" ] && warn "dry-run: ничего не меняю"
 
 if [ "$DO_UNINSTALL" = "1" ]; then
