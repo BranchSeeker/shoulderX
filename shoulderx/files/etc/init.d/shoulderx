@@ -1,0 +1,39 @@
+#!/bin/sh /etc/rc.common
+# shoulderX не держит демон.
+#
+# At boot: собираем /etc/xray/config.json из дискового кэша подписки — без сети,
+# чтобы не тормозить загрузку. START=98, чтобы конфиг был готов до S99xray.
+# По cron: `shoulderx apply --quiet` — обновляет подписку и перезапускает xray.
+
+START=98
+
+start() {
+	[ -f /etc/shoulderx/sub.json ] && \
+		/usr/bin/shoulderx gen --write --quiet >/dev/null 2>&1
+	/usr/bin/shoulderx schedule >/dev/null 2>&1
+	install_watchdog
+}
+
+# Страховка от «нет интернета»: если xray умер, а правила nft остались,
+# LAN уходит в чёрную дыру. Раз в минуту проверяем и снимаем правила.
+install_watchdog() {
+	CRON=/etc/crontabs/root
+	LINE='* * * * * /usr/lib/shoulderx/tproxy.sh watch >/dev/null 2>&1'
+
+	mkdir -p /etc/crontabs
+	touch "$CRON"
+
+	if ! grep -qF 'tproxy.sh watch' "$CRON" 2>/dev/null; then
+		printf '%s\n' "$LINE" >> "$CRON"
+	fi
+
+	/etc/init.d/cron restart >/dev/null 2>&1
+}
+
+reload() {
+	start
+}
+
+boot() {
+	start "$@"
+}

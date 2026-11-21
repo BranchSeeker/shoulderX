@@ -1,0 +1,33 @@
+#!/bin/sh /etc/rc.common
+# Инстанс Xray для shoulderX.
+#
+# Нужен, когда xray ставится не пакетом из фида, а бинарником из релиза
+# shoulderX (установщик скачивает нужный архив под архитектуру роутера).
+# Если пакет xray-core установлен, shoulderX по умолчанию использует его
+# /etc/init.d/xray — см. option xray_init в /etc/config/shoulderx.
+
+USE_PROCD=1
+START=99
+
+PROG=/usr/bin/xray
+CONF=/etc/xray/config.json
+ASSET=/usr/share/xray
+
+start_service() {
+	[ -x "$PROG" ] || return 0
+
+	procd_open_instance
+	procd_set_param command "$PROG" run -c "$CONF"
+	procd_set_param env XRAY_LOCATION_ASSET="$ASSET"
+	procd_set_param respawn
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="1000000 1000000"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+reload_service() {
+	stop
+	start
+}

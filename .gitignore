@@ -1,0 +1,47 @@
+# --- ОС и редакторы ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# --- сборка ---
+/openwrt-sdk-*/
+/.openwrt-sdk/
+/.sdk-cache/
+/bin/
+/build_dir/
+/staging_dir/
+/tmp/
+/dl/
+/logs/
+/feeds/
+/.config
+/.config.old
+
+# --- пакеты: собранные файлы в git не кладём (они едут в релиз) ---
+*.apk
+*.ipk
+*.o
+*.a
+*.zst
+
+# --- логи, бэкапы, мусор ---
+*.log
+*.bak
+*.orig
+*.rej
+*.tmp
+_*_tmp.*
+
+# --- локальные инструменты, ключи, черновики ---
+/tools/
+/.scratch/
+
+# --- node / python ---
+node_modules/
+__pycache__/
+*.pyc

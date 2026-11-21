@@ -1,0 +1,3 @@
+#!/bin/sh
+# shoulderx — обёртка: запускает ucode-модуль с путём поиска модулей.
+exec ucode -L /usr/lib/shoulderx /usr/lib/shoulderx/main.uc "$@"

@@ -1,0 +1,10 @@
+{
+	"admin/services/shoulderx": {
+		"title": "ShoulderX",
+		"order": 61,
+		"action": {
+			"type": "view",
+			"path": "shoulderx/shoulderx"
+		}
+	}
+}

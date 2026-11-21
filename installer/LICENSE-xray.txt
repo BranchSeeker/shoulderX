@@ -1,0 +1,14 @@
+shoulderX распространяет бинарники Xray-core в своих релизах — без изменений,
+как есть с upstream.
+
+  Xray-core:  https://github.com/XTLS/Xray-core
+  Версия:     26.10.21 (тег v26.10.21)
+  Лицензия:   Mozilla Public License 2.0 (MPL-2.0)
+  Текст:      https://www.mozilla.org/en-US/MPL/2.0/
+  Исходники:  https://github.com/XTLS/Xray-core/tree/v26.10.21
+
+Архивы в релизе (`xray-26.10.21-<arch>.zip`) — это переименованные официальные
+ассеты `Xray-linux-<arch>.zip` того же тега; содержимое не менялось, sha256
+указаны в `xray-checksums.txt` рядом.
+
+Copyright (c) XTLS and contributors.

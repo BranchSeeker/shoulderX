@@ -1,0 +1,14 @@
+{
+	"luci-app-shoulderx": {
+		"description": "Grant access to shoulderX",
+		"read": {
+			"uci": [ "shoulderx" ],
+			"file": {
+				"/usr/bin/shoulderx": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "shoulderx" ]
+		}
+	}
+}

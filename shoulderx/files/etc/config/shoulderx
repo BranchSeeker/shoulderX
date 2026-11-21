@@ -1,0 +1,58 @@
+config settings 'settings'
+	# Ссылка подписки (Remnawave/Happ). Задаётся в LuCI или руками.
+	option subscription_url ''
+
+	# Режим:
+	#   lte  — «обход БС»: весь LAN в туннель (кроме whitelist РФ);
+	#   wifi — «домашний интернет»: YouTube -> секция yt (все WiFi-узлы),
+	#          остальное запрещённое в РФ -> секция eu (WiFi без РФ),
+	#          белые списки РФ -> напрямую.
+	option mode 'lte'
+
+	# Фильтры узлов по имени группы (подстрока, регистр не важен).
+	# «Обход БС»: какие группы брать в туннель.
+	option lte_filter 'LTE'
+	# «Домашний интернет»: базовый фильтр WiFi-узлов.
+	option wifi_filter 'WiFi'
+	# Исключения жёстко в коде: из секции eu всегда выпадают российские узлы
+	# («Россия»/«Russia»/🇷🇺), из yt — ничего (все WiFi-узлы).
+	# socks-инбаунд для podkop и других локальных клиентов.
+	option socks_port '20180'
+
+	# Необязательный HTTP-прокси (0 — выключен). Нужен клиентам без socks
+	# и удобен для проверки туннеля: wget с http_proxy.
+	option http_port '0'
+
+	# Порт локального API Xray (127.0.0.1). Через него LuCI показывает плитки
+	# серверов и выбранный балансировщиком узел; 0 — не поднимать.
+	option api_port '20190'
+
+	# Порт прозрачного прокси для LAN (nft tproxy -> xray). 0 — выключено.
+	option tproxy_port '0'
+
+	# Маршрутизация по geo-файлам RoscomVPN: whitelist (РФ) -> напрямую,
+	# всё остальное -> в туннель. Файлы качаются через туннель (shoulderx geo).
+	option geo '0'
+	option geo_dir '/usr/share/xray'
+	option geo_ttl '604800'
+
+	# Куда писать готовый конфиг Xray.
+	option config_path '/etc/xray/config.json'
+
+
+
+	# Служебное: UA захардкожен (Remnawave отдаёт Xray JSON только для Happ),
+	# hwid генерируется из MAC роутера при первом запуске.
+	option user_agent 'Happ/2.7.0'
+	option hwid ''
+
+	# Обновление конфига по расписанию.
+	option enable_schedule '0'
+	option update_interval '6h'
+
+	# Чем перезапускать Xray после записи конфига.
+	option restart_cmd '/etc/init.d/xray restart'
+
+	# init-скрипт Xray: пусто — авто (/etc/init.d/xray, а если пакета нет —
+	# /etc/init.d/shoulderx-xray из этого пакета).
+	option xray_init ''

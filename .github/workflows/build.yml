@@ -1,0 +1,255 @@
+name: build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - 'shoulderx/**'
+      - 'luci-app-shoulderx/**'
+      - 'installer/**'
+      - 'scripts/**'
+      - 'version.mk'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'shoulderx/**'
+      - 'luci-app-shoulderx/**'
+      - 'installer/**'
+      - 'scripts/**'
+      - 'version.mk'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET_PATH: x86/64
+  TARGET_NAME: x86-64
+  # архитектуры Xray, которые кладём в релиз (имена ассетов XTLS)
+  XRAY_ARCHES: arm64-v8a arm32-v7a arm32-v6 mips32 mips32le 64 32
+
+jobs:
+  lint:
+    name: Проверки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: версия совпадает во всех местах
+        run: |
+          set -eu
+          vmk=$(sed -n 's/^PKG_VERSION:=//p' version.mk)
+          rmk=$(sed -n 's/^PKG_RELEASE:=//p' version.mk)
+          vbe=$(sed -n 's/^PKG_VERSION:=//p' shoulderx/Makefile)
+          vlu=$(sed -n 's/^PKG_VERSION:=//p' luci-app-shoulderx/Makefile)
+          echo "version.mk: $vmk-r$rmk; shoulderx: $vbe; luci: $vlu"
+          test "$vmk" = "$vbe"
+          test "$vmk" = "$vlu"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            test "v$vmk" = "$GITHUB_REF_NAME" || { echo "тег $GITHUB_REF_NAME не совпадает с версией v$vmk"; exit 1; }
+          fi
+
+      - name: "xray: версия в установщике = version.mk"
+        run: |
+          set -eu
+          xv=$(sed -n 's/^XRAY_VERSION:=//p' version.mk)
+          xt=$(sed -n 's/^XRAY_TAG:=//p' version.mk)
+          grep -q "XRAY_VERSION=\"$xv\"" installer/shoulderx-install.sh
+          grep -q "XRAY_TAG=\"$xt\"" installer/shoulderx-install.sh
+          # контрольные суммы должны быть на все архитектуры
+          for a in $XRAY_ARCHES; do
+            grep -q "Xray-linux-$a.zip" installer/xray-checksums.txt || { echo "нет суммы для $a"; exit 1; }
+          done
+
+      - name: shell-скрипты
+        run: |
+          set -e
+          for f in installer/shoulderx-install.sh \
+                   shoulderx/files/usr/bin/shoulderx \
+                   shoulderx/files/etc/init.d/shoulderx \
+                   shoulderx/files/etc/init.d/shoulderx-xray \
+                   shoulderx/files/usr/lib/shoulderx/tproxy.sh \
+                   scripts/bump-xray.sh; do
+            sh -n "$f"
+          done
+
+      - name: JS LuCI
+        run: node --check luci-app-shoulderx/htdocs/luci-static/resources/view/shoulderx/shoulderx.js
+
+      - name: JSON меню и ACL
+        run: |
+          set -e
+          for f in luci-app-shoulderx/root/usr/share/luci/menu.d/*.json \
+                   luci-app-shoulderx/root/usr/share/rpcd/acl.d/*.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done
+
+      - name: ucode (синтаксис)
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          if sudo apt-get install -y -qq ucode > /dev/null 2>&1; then
+            for f in shoulderx/files/usr/lib/shoulderx/*.uc; do
+              ucode -c "$f" || exit 1
+            done
+          else
+            echo "ucode нет в apt — шаг пропущен"
+          fi
+
+  build:
+    name: Сборка ${{ matrix.ext }}
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ext: apk
+            sdk: '25.12.6'
+          - ext: ipk
+            sdk: '24.10.8'
+    env:
+      PKG_EXT: ${{ matrix.ext }}
+      SDK_VERSION: ${{ matrix.sdk }}
+      SDK_CACHE: ${{ github.workspace }}/.sdk-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Место на диске
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Зависимости сборки
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential gawk gettext libncurses-dev \
+            unzip zstd rsync python3 file wget
+
+      - name: Кэш SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDK_CACHE }}
+          key: sdk-${{ matrix.sdk }}-${{ env.TARGET_NAME }}-v1
+
+      - name: Скачать SDK
+        run: |
+          set -euo pipefail
+          mkdir -p "$SDK_CACHE"
+          if ! ls "$SDK_CACHE"/sdk.tar.* > /dev/null 2>&1; then
+            URL="https://downloads.openwrt.org/releases/${SDK_VERSION}/targets/${TARGET_PATH}/"
+            FILE=$(curl -fsSL "$URL" | grep -o 'openwrt-sdk-[^"<]*\.tar\.\(zst\|xz\)' | head -n 1)
+            test -n "$FILE"
+            echo "SDK: $FILE"
+            curl -fL --retry 3 -o "$SDK_CACHE/sdk.tar.${FILE##*.}" "$URL$FILE"
+          fi
+          ls -lh "$SDK_CACHE"
+
+      - name: Распаковать SDK
+        run: |
+          set -euo pipefail
+          ARC=$(ls "$SDK_CACHE"/sdk.tar.* | head -n 1)
+          case "$ARC" in
+            *.zst) tar --zstd -xf "$ARC" ;;
+            *)     tar -xf "$ARC" ;;
+          esac
+          SDK_DIR=$(find . -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n 1)
+          test -n "$SDK_DIR"
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "SDK: $SDK_DIR"
+
+      - name: Собрать пакеты
+        run: |
+          set -euo pipefail
+          cp -r shoulderx luci-app-shoulderx "$SDK_DIR/package/"
+          cd "$SDK_DIR"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
+          make package/shoulderx/compile V=s -j"$(nproc)"
+          make package/luci-app-shoulderx/compile V=s -j"$(nproc)"
+
+      - name: Собрать артефакты
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find "$SDK_DIR/bin/packages" -type f \( \
+            -name "shoulderx[-_]*.$PKG_EXT" -o \
+            -name "luci-app-shoulderx[-_]*.$PKG_EXT" \) -exec cp -v {} out/ \;
+          ls -1 out/
+          test "$(ls -1 out | wc -l)" -eq 2
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shoulderx-${{ matrix.ext }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Релиз
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shoulderx-*
+          path: out
+          merge-multiple: true
+
+      - name: Пакеты и SHA256SUMS
+        run: |
+          set -euo pipefail
+          ls -lh out
+          test "$(ls -1 out/*.apk | wc -l)" -eq 2
+          test "$(ls -1 out/*.ipk | wc -l)" -eq 2
+          cp installer/shoulderx-install.sh out/
+          cp installer/LICENSE-xray.txt out/
+          (cd out && sha256sum *.apk *.ipk shoulderx-install.sh > SHA256SUMS)
+          cat out/SHA256SUMS
+
+      - name: Зеркало Xray в релиз
+        run: |
+          set -euo pipefail
+          XV=$(sed -n 's/^XRAY_VERSION:=//p' version.mk)
+          XT=$(sed -n 's/^XRAY_TAG:=//p' version.mk)
+          URL="https://github.com/XTLS/Xray-core/releases/download/$XT"
+          for a in $XRAY_ARCHES; do
+            src="Xray-linux-$a.zip"
+            dst="xray-$XV-$a.zip"
+            echo "== $dst"
+            curl -fL --retry 3 -o "out/$dst" "$URL/$src"
+            want=$(awk -v n="$src" '$2==n {print $1}' installer/xray-checksums.txt)
+            got=$(sha256sum "out/$dst" | awk '{print $1}')
+            test -n "$want" || { echo "нет суммы для $src"; exit 1; }
+            test "$want" = "$got" || { echo "sha256 не совпал: $src"; exit 1; }
+          done
+          (cd out && sha256sum xray-*.zip > xray-checksums.txt)
+          cat out/xray-checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.apk
+            out/*.ipk
+            out/SHA256SUMS
+            out/shoulderx-install.sh
+            out/xray-*.zip
+            out/xray-checksums.txt
+            out/LICENSE-xray.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
