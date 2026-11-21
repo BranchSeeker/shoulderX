@@ -393,6 +393,14 @@ return view.extend({
 		}
 		if (mode) args.push('--mode=' + (Array.isArray(mode) ? mode[0] : mode));
 
+		// ссылки подписки — тоже из формы: иначе первое добавление (когда в uci
+		// пусто) уходило в apply без адреса и падало
+		var subs = this.fieldValues('Ссылки подписки');
+		if (subs) {
+			for (var i = 0; i < subs.length; i++)
+				args.push('--url=' + subs[i]);
+		}
+
 		[ [ 'Обход БС: группы узлов', '--lte-filter=' ],
 		  [ 'Домашний интернет: группы узлов', '--wifi-filter=' ] ].forEach(function (p) {
 			var v = self.fieldValues(p[0]);

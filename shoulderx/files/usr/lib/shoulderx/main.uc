@@ -266,7 +266,12 @@ function parse_args(argv) {
 		else if (v == "--refresh-lists")
 			a.refresh_lists = true;
 		else if (substr(v, 0, 6) == "--url=")
-			a.url = substr(v, 6);
+		{
+			let u = substr(v, 6);
+			if (type(a.url) != "array")
+				a.url = [];
+			push(a.url, u);
+		}
 		else if (substr(v, 0, 7) == "--mode=")
 			a.mode = substr(v, 7);
 		else if (substr(v, 0, 8) == "--group=")
@@ -365,7 +370,7 @@ function fetch_subscription(s, urls, proxy) {
 }
 function cmd_fetch(a) {
 	let s = settings();
-	let urls = (a.url != null && a.url != "") ? [ a.url ] : s.urls;
+	let urls = (type(a.url) == "array" && length(a.url) > 0) ? a.url : s.urls;
 	if (length(urls) == 0) {
 		out("нет ссылки подписки: задай option subscription_url или --url=");
 		return 2;
@@ -798,6 +803,10 @@ function uci_store_args(a) {
 	c.load("shoulderx");
 	let changed = false;
 
+	if (type(a.url) == "array" && length(a.url) > 0) {
+		c.set("shoulderx", "settings", "subscription_url", a.url);
+		changed = true;
+	}
 	if (a.mode != null && a.mode != "") {
 		c.set("shoulderx", "settings", "mode", a.mode);
 		changed = true;
@@ -823,7 +832,10 @@ function cmd_apply(a) {
 		if (a.wifi_filter != null) push(parts, "--wifi-filter=" + a.wifi_filter);
 		if (a.yt_exclude != null) push(parts, "--yt-exclude=" + a.yt_exclude);
 		if (a.eu_exclude != null) push(parts, "--eu-exclude=" + a.eu_exclude);
-		if (a.url != null && a.url != "") push(parts, "--url=" + a.url);
+		if (type(a.url) == "array") {
+			for (let u in a.url)
+				push(parts, "--url=" + u);
+		}
 
 		job_write({ state: "running", started: time(), phase: "старт", rc: 0 });
 		// setsid отвязывает воркер от ssh-сессии: иначе его убивает SIGHUP
@@ -847,7 +859,7 @@ function cmd_apply(a) {
 	if (a.wifi_filter != null) push(dbg, "--wifi=" + a.wifi_filter);
 	system("logger -t shoulderx 'apply " + join(" ", dbg) + " (uci mode=" + s.mode + " lte=" + join(",", s.lte_filter) + " wifi=" + join(",", s.wifi_filter) + ")'");
 
-	let urls = (a.url != null && a.url != "") ? [ a.url ] : s.urls;
+	let urls = (type(a.url) == "array" && length(a.url) > 0) ? a.url : s.urls;
 	if (length(urls) > 0) {
 		// 1. подписка — напрямую (провайдер доступен без туннеля),
 		//    при неудаче пробуем через уже поднятый туннель
