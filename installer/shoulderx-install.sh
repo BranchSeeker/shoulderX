@@ -77,18 +77,18 @@ TLS_INSECURE=0
 note_insecure() {
 	[ "$TLS_INSECURE" = "1" ] && return 0
 	TLS_INSECURE=1
-	warn "сертификаты на роутере не проходят проверку — качаю без проверки TLS (sha256 проверю)"
+	printf '  %b!%b сертификаты не проходят проверку (часы: %s) — качаю без TLS, целостность проверю по sha256\n' "$C_Y" "$C_R" "$(date 2>/dev/null)" >&2
 }
 
 fetch_secure() {   # $1 url -> stdout
 	if have curl; then
-		curl -fsSL --connect-timeout 10 -m 60 "$1" && return 0
+		curl -fsSL --connect-timeout 10 -m 60 "$1" 2>/dev/null && return 0
 	fi
 	if have wget; then
-		wget -q -T 60 -O - "$1" && return 0
+		wget -q -T 60 -O - "$1" 2>/dev/null && return 0
 	fi
 	if have uclient-fetch; then
-		uclient-fetch -q -O - "$1" && return 0
+		uclient-fetch -q -O - "$1" 2>/dev/null && return 0
 	fi
 	return 1
 }
@@ -125,13 +125,13 @@ run_to() {   # run_to <секунд> <команда...>
 dl_secure() {      # $1 url $2 file — с прогрессом, чтобы не казалось «висит»
 	[ -n "$DL_TIMEOUT" ] || DL_TIMEOUT=240
 	if have curl; then
-		curl -fL --connect-timeout 10 -m "$DL_TIMEOUT" -o "$2" "$1" && return 0
+		curl -fLsS --connect-timeout 10 -m "$DL_TIMEOUT" -o "$2" "$1" 2>/dev/null && return 0
 	fi
 	if have wget; then
-		run_to "$DL_TIMEOUT" wget -T 30 -O "$2" "$1" && return 0
+		run_to "$DL_TIMEOUT" wget -q -T 30 -O "$2" "$1" 2>/dev/null && return 0
 	fi
 	if have uclient-fetch; then
-		run_to "$DL_TIMEOUT" uclient-fetch -O "$2" "$1" && return 0
+		run_to "$DL_TIMEOUT" uclient-fetch -q -O "$2" "$1" 2>/dev/null && return 0
 	fi
 	return 1
 }
