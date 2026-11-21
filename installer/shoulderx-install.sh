@@ -297,8 +297,33 @@ setup_xray_service() {
 	fi
 }
 
-install_xray() {
-	step "Xray $XRAY_VERSION"
+# В фиде OpenWrt xray-core обычно той же версии, что мы пинуем. Тогда не надо
+# тянуть 14 МБ через прокси — ставим пакет (быстро и с штатным init).
+feed_pinned_available() {
+	[ "$PKG_MANAGER" = "apk" ] || [ "$PKG_MANAGER" = "opkg" ] || return 1
+	if [ "$PKG_MANAGER" = "apk" ]; then
+		apk list 2>/dev/null | grep -q "^xray-core-${XRAY_VERSION}"
+	else
+		opkg list 2>/dev/null | grep -q "^xray-core - ${XRAY_VERSION}"
+	fi
+}
+
+install_xray_feed() {
+	if [ "$DRY" = "1" ]; then
+		ok "(dry-run) поставил бы xray-core=${XRAY_PKG_VERSION} из фида"
+		return 0
+	fi
+	if [ "$PKG_MANAGER" = "apk" ]; then
+		apk add "xray-core=${XRAY_PKG_VERSION}" >/dev/null 2>&1 || \
+		apk add xray-core >/dev/null 2>&1 || return 1
+	else
+		opkg update >/dev/null 2>&1 || true
+		opkg install "xray-core" >/dev/null 2>&1 || return 1
+	fi
+	return 0
+}
+
+install_xray() {	step "Xray $XRAY_VERSION"
 	info "архив ~14 МБ; если канал медленный, это займёт минуту-другую"
 
 	cur=$(xray_installed_version)
@@ -306,6 +331,17 @@ install_xray() {
 		ok "уже установлен $cur"
 		setup_xray_service
 		return 0
+	fi
+
+	# быстрый путь: в фиде ровно наша версия — не качаем 14 МБ
+	if [ "$XRAY_SRC" = "auto" ] && feed_pinned_available; then
+		info "в фиде есть xray-core ${XRAY_VERSION} — ставлю пакетом"
+		if install_xray_feed; then
+			ok "xray-core ${XRAY_PKG_VERSION} из фида"
+			setup_xray_service
+			return 0
+		fi
+		warn "пакет из фида не встал — качаю бинарник"
 	fi
 
 	if [ "$DRY" = "0" ]; then
@@ -490,7 +526,7 @@ shoulderX installer
   --wifi-filter=X       фильтр групп для «домашнего интернета» (WiFi)
   --mirror=URL          своё зеркало GitHub (префикс, напр. https://gh-proxy.com/)
   --no-tproxy           не включать прозрачный прокси для LAN
-  --xray-from-upstream  ставить Xray только с XTLS (не из релиза)
+  --xray-from-upstream  ставить Xray только с XTLS (не из релиза и не из фида)
   --xray-from-feed      ставить xray-core из фида OpenWrt
   --no-apply            только установить, конфиг не собирать
   --uninstall           удалить shoulderX
