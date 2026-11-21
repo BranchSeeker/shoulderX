@@ -369,8 +369,12 @@ return view.extend({
 			if (!t || t.textContent.trim().indexOf(title) !== 0)
 				continue;
 			var out = [];
-			var inputs = rows[i].querySelectorAll('input[type="text"]');
+			// не полагаемся на type="text": у части виджетов атрибута нет
+			var inputs = rows[i].querySelectorAll('input');
 			for (var k = 0; k < inputs.length; k++) {
+				var t2 = (inputs[k].getAttribute('type') || 'text').toLowerCase();
+				if (t2 !== 'text' && t2 !== 'url' && t2 !== 'search')
+					continue;
 				var v = (inputs[k].value || '').trim();
 				if (v !== '' && out.indexOf(v) < 0)
 					out.push(v);
@@ -396,6 +400,15 @@ return view.extend({
 		// ссылки подписки — тоже из формы: иначе первое добавление (когда в uci
 		// пусто) уходило в apply без адреса и падало
 		var subs = this.fieldValues('Ссылки подписки');
+		if (!subs || !subs.length) {
+			// запасной путь: значение опции формы (DynamicList отдаёт массив)
+			try {
+				var so = self.map.lookupOption('subscription_url', 'settings');
+				var sv = so ? so.formvalue('settings') : null;
+				if (sv != null && sv !== '')
+					subs = Array.isArray(sv) ? sv : [ sv ];
+			} catch (e) { subs = null; }
+		}
 		if (subs) {
 			for (var i = 0; i < subs.length; i++)
 				args.push('--url=' + subs[i]);
