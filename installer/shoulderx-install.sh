@@ -59,10 +59,10 @@ else
 	C_R=""; C_G=""; C_Y=""; C_RED=""; C_B=""
 fi
 
-step() { printf '\n%s==> %s%s\n' "$C_B" "$1" "$C_R"; }
-ok()   { printf '  %sok%s %s\n' "$C_G" "$C_R" "$1"; }
-warn() { printf '  %s!%s %s\n' "$C_Y" "$C_R" "$1" >&2; }
-err()  { printf '  %sX%s %s\n' "$C_RED" "$C_R" "$1" >&2; }
+step() { printf '\n%b==> %s%b\n' "$C_B" "$1" "$C_R"; }
+ok()   { printf '  %bok%b %s\n' "$C_G" "$C_R" "$1"; }
+warn() { printf '  %b!%b %s\n' "$C_Y" "$C_R" "$1" >&2; }
+err()  { printf '  %bX%b %s\n' "$C_RED" "$C_R" "$1" >&2; }
 info() { printf '    %s\n' "$1"; }
 
 cleanup_tmp() { rm -rf "$TMPDIR" 2>/dev/null || true; }
@@ -108,15 +108,30 @@ fetch() {   # fetch <url> -> stdout, с откатом на небезопасн
 	fi
 }
 
-dl_secure() {      # $1 url $2 file
+# Ограничение по времени на одну попытку: иначе медленное зеркало вешает
+# установщик навсегда (busybox wget без этого может тянуть часами).
+DL_TIMEOUT="${SHOULDERX_DL_TIMEOUT:-240}"
+
+run_to() {   # run_to <секунд> <команда...>
+	if have timeout; then
+		to="$1"; shift
+		timeout "$to" "$@"
+	else
+		shift
+		"$@"
+	fi
+}
+
+dl_secure() {      # $1 url $2 file — с прогрессом, чтобы не казалось «висит»
+	[ -n "$DL_TIMEOUT" ] || DL_TIMEOUT=240
 	if have curl; then
-		curl -fsSL --connect-timeout 10 -m 300 -o "$2" "$1" && return 0
+		curl -fL --connect-timeout 10 -m "$DL_TIMEOUT" -o "$2" "$1" && return 0
 	fi
 	if have wget; then
-		wget -q -T 300 -O "$2" "$1" && return 0
+		run_to "$DL_TIMEOUT" wget -T 30 -O "$2" "$1" && return 0
 	fi
 	if have uclient-fetch; then
-		uclient-fetch -q -O "$2" "$1" && return 0
+		run_to "$DL_TIMEOUT" uclient-fetch -O "$2" "$1" && return 0
 	fi
 	return 1
 }
@@ -126,11 +141,11 @@ dl() {             # dl <url> <file>, с откатом на небезопас�
 
 	note_insecure
 	if have curl; then
-		curl -fsSL -k --connect-timeout 10 -m 300 -o "$2" "$1"
+		curl -fL -k --connect-timeout 10 -m "$DL_TIMEOUT" -o "$2" "$1"
 	elif have wget; then
-		wget -q --no-check-certificate -T 300 -O "$2" "$1"
+		run_to "$DL_TIMEOUT" wget --no-check-certificate -T 30 -O "$2" "$1"
 	elif have uclient-fetch; then
-		uclient-fetch -q --no-check-certificate -O "$2" "$1"
+		run_to "$DL_TIMEOUT" uclient-fetch --no-check-certificate -O "$2" "$1"
 	else
 		return 1
 	fi
@@ -168,7 +183,13 @@ fetch_any() {   # fetch_any <url> -> stdout, первый рабочий ист�
 }
 
 dl_any() {      # dl_any <url> <file>
+	first=1
 	for u in $(url_candidates "$1"); do
+		if [ "$first" = "1" ]; then
+			first=0
+		else
+			warn "пробую зеркало: $u"
+		fi
 		if dl "$u" "$2"; then
 			return 0
 		fi
@@ -278,6 +299,7 @@ setup_xray_service() {
 
 install_xray() {
 	step "Xray $XRAY_VERSION"
+	info "архив ~14 МБ; если канал медленный, это займёт минуту-другую"
 
 	cur=$(xray_installed_version)
 	if [ "$cur" = "$XRAY_VERSION" ]; then
