@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-11-22
+
+Переход на собственные geo-файлы [fast4g.ru-geo-files](https://github.com/BranchSeeker/fast4g.ru-geo-files)
+и новые схемы маршрутизации.
+
+* `geosite.dat` (~2.4 МБ) и `geoip.dat` (~460 КБ) из rolling-релиза `latest`
+  едут в пакете; `shoulderx geo` обновляет их вручную.
+* **Обход БС (lte)**: `default -> proxy`, `whitelist (домены+IP) -> direct`.
+* **Домашний интернет (wifi)**: `default -> direct`, `youtube -> секция yt`,
+  `russian-block -> секция eu`.
+* Убраны прежние профили (block-листы, `category-ru`, `microsoft/apple/steam…`):
+  теперь шумного трафика в прокси нет — в WiFi-режиме через туннель идут только
+  YouTube и то, что реально заблокировано в РФ.
+* Категории `RUSSIAN-BLOCK`/`WHITELIST`/`YOUTUBE` берутся и из geosite, и из
+  geoip (раньше IP-часть покрывалась только whitelist'ом).
 ## 0.4.3 — 2026-11-21
 
 * Исправлено первое добавление подписки кнопкой «Обновить подписку и применить»:

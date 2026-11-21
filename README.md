@@ -31,36 +31,27 @@ podkop (если нужен) просто ходит в его socks-порт.
 
 ## Режимы и секции
 
-| Режим | Что в туннель | Что напрямую |
-|---|---|---|
-| **Обход БС** (`lte`) | всё, один балансировщик `auto` | домены и подсети из списков РКН (`geosite.txt`/`geoip.txt`) |
-| **Домашний интернет** (`wifi`) | домены секций `yt` и `eu`, у каждой свой балансировщик | всё остальное |
+| Режим | По умолчанию | В туннель | Напрямую |
+|---|---|---|---|
+| **Обход БС** (`lte`) | всё в туннель | всё, кроме белого списка | `whitelist` + `private` (домены и IP) |
+| **Домашний интернет** (`wifi`) | всё напрямую | YouTube и `russian-block` | всё остальное |
 
-Секции в WiFi-режиме — как `skop_yt` / `skop_eu` в podkop:
+Правила ровно такие:
 
-* `yt` — **все** WiFi-узлы (РФ + EU): туда идёт только YouTube
-  (`ext:geosite.dat:youtube`);
-* `eu` — те же WiFi-узлы **без российских**: туда идёт всё остальное, что в РФ
-  запрещено (всё, что не попало в whitelist), — то есть весь «запрещённый»
-  интернет, кроме YouTube.
+```
+lte:   whitelist -> direct,   default -> proxy (балансировщик auto)
+wifi:  default -> direct,     youtube -> yt (proxy),   russian-block -> eu (proxy)
+```
 
-Белые списки РФ (домены и IP) идут напрямую, реклама/торренты/телеметрия
-блокируются. Российские узлы в `eu` не попадают намеренно: зарубежные сервисы
-такие адреса блокируют (ChatGPT отвечает 403), а РФ-сайты и так идут напрямую.
-Узел считается российским, если в имени группы есть «Россия»/«Russia»/🇷🇺.
+Секции в WiFi-режиме:
 
-Списки allow-domains больше не используются — маршрут целиком на geo-файлах
-RoscomVPN.
+* `yt` — балансировщик для YouTube (`geosite:YOUTUBE`, `geoip:YOUTUBE`);
+* `eu` — балансировщик для заблокированного в РФ (`geosite:RUSSIAN-BLOCK`,
+  `geoip:RUSSIAN-BLOCK`).
 
-`russia_inside` в дефолт не входит намеренно: российские сервисы (Яндекс, ВК,
-Кинопоиск, RuTube, Госуслуги, Ozon) должны открываться напрямую — через ноду они
-только тратят трафик и часто не работают. А `geoblock` наоборот нужен: в нём
-`openai.com`, `chatgpt.com`, `claude.ai`, `anthropic.com` — без туннеля они
-отдают 403.
-
-Списки берутся из [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains)
-и кэшируются в `/etc/shoulderx/lists` на сутки. Списки РКН shoulderX не качает
-заново — читает те, что уже лежат у shoulderkop.
+Российские узлы в `eu` не попадают: зарубежные сервисы такие адреса блокируют,
+а РФ-сайты и так идут напрямую. Узел считается российским, если в имени группы
+есть «Россия»/«Russia»/🇷🇺 (фильтры групп настраиваются в LuCI).
 
 ## Балансировщики
 
@@ -121,7 +112,7 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 `ghproxy.net`) для пакетов и Xray. Сам скрипт можно взять через jsDelivr:
 
 ```sh
-wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.4.3/installer/shoulderx-install.sh | sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.5.0/installer/shoulderx-install.sh | sh
 ```
 
 Своё зеркало (префикс к адресам GitHub):
@@ -248,28 +239,33 @@ $ shoulderx check --group=ru
 провайдера, поэтому на новом роутере он может не пройти, пока не освободится
 слот.
 
-## Маршрутизация по geo-файлам (RoscomVPN)
+## Маршрутизация по geo-файлам (fast4g.ru)
 
-С `option geo '1'` shoulderX собирает правила по профилю **WHITELIST** из
-[hydraponique/roscomvpn-routing](https://github.com/hydraponique/roscomvpn-routing):
+`option geo '1'` — маршрут строится на файлах
+[BranchSeeker/fast4g.ru-geo-files](https://github.com/BranchSeeker/fast4g.ru-geo-files)
+(собираются ежедневно, rolling-релиз `latest`).
 
-| правило | куда |
-|---|---|
-| `ext:geosite.dat:win-spy`, `torrent`, `category-ads` | block |
-| `ext:geosite.dat:private`, `ext:geosite.dat:whitelist` | direct |
-| `ext:geoip.dat:private`, `ext:geoip.dat:whitelist` | direct |
-| остальное | балансировщик (туннель) |
+Категории, которые использует shoulderX:
 
-Файлы `geoip.dat` / `geosite.dat` лежат в `/usr/share/xray` и обновляются
-командой `shoulderx geo` (или автоматически в `apply`, если старше
-`geo_ttl`, по умолчанию неделя). **Качаются только через туннель** — напрямую
-jsDelivr из РФ недоступен, поэтому `apply` сначала поднимает bootstrap-конфиг.
+| категория | где | куда |
+|---|---|---|
+| `WHITELIST`, `PRIVATE` (geosite + geoip) | оба режима | direct |
+| `YOUTUBE` (geosite + geoip) | wifi | секция `yt` |
+| `RUSSIAN-BLOCK` (geosite + geoip) | wifi | секция `eu` |
+| всё остальное | lte | секция `auto` |
 
-Порядок установки и инициализации целиком — [docs/INSTALL.md](docs/INSTALL.md):
+Порядок правил: сначала `yt`, потом белый список, потом `russian-block` —
+поэтому домен, попавший и в YouTube, и в общий список, уйдёт в `yt`.
 
-1. подписка качается **напрямую**;
-2. geo-файлы — **через прокси**;
-3. затем поднимается полный туннель с маршрутизацией и tproxy.
+Файлы `geoip.dat` (~460 КБ) и `geosite.dat` (~2.4 МБ) **едут в пакете** —
+`/usr/share/xray/`, поэтому сборка конфига работает офлайн. Обновить списки:
+
+```sh
+shoulderx geo      # тянет свежие с GitHub (rolling latest)
+```
+
+Автообновления нет (`geo_ttl=0`): в сети без доступа к GitHub сборка не должна
+висеть на таймаутах. Обновление geo приезжает вместе с пакетом.
 
 ## Связка с podkop
 
@@ -309,7 +305,7 @@ shoulderx gen --mode=wifi --write
 - [x] разбор подписки (Xray JSON), отсев заглушек, дубликатов и битых REALITY-узлов
 - [x] режимы `lte` / `wifi`, секции `yt` и `eu`
 - [x] балансировщики `leastPing` + `observatory` на каждую секцию
-- [x] списки: РКН от shoulderkop + сообщество allow-domains с кэшем
+- [x] маршрут на geo-файлах fast4g.ru, вкомплектованных в пакет
 - [x] синхронизация: добавленные/удалённые узлы, отчёт в статусе
 - [x] валидация `xray run -test` перед записью
 - [x] LuCI: страница, меню, ACL

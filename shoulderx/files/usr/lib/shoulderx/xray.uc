@@ -28,25 +28,20 @@ const YT_DOMAINS = [
 	"domain:youtubekids.com", "domain:youtubegaming.com"
 ];
 
-// Профиль DEFAULT из roscomvpn-routing: что явно в прокси, что явно напрямую.
-// Порядок важен — block, потом proxy, потом direct, остальное в прокси.
-const BLOCK_TAGS = [ "win-spy", "torrent", "category-ads" ];
-
-const DIRECT_TAGS = [ "private", "category-ru", "whitelist", "microsoft", "apple",
-                      "epicgames", "riot", "escapefromtarkov", "steam", "twitch",
-                      "pinterest", "faceit" ];
-
-// Явно в туннель, даже если домен попал в белые списки: из РФ они отдают
-// заглушку/403 (ChatGPT) или работают только через VPN.
-const PROXY_TAGS = [ "telegram" ];
+// Схемы на geo-файлах fast4g.ru:
+//   lte  — default: proxy, whitelist: direct
+//   wifi — default: direct, youtube: yt (proxy), russian-block: eu (proxy)
+//
+// PROXY_DOMAINS — запасной набор, если geo-файлов нет вовсе (wifi без geo).
 const PROXY_DOMAINS = [
 	"domain:chatgpt.com", "domain:openai.com", "domain:claude.ai", "domain:anthropic.com",
 	"domain:instagram.com", "domain:facebook.com", "domain:fbcdn.net", "domain:meta.com",
 	"domain:x.com", "domain:twitter.com", "domain:t.co", "domain:twimg.com",
 	"domain:discord.com", "domain:discordapp.com", "domain:discord.gg",
 	"domain:github.com", "domain:githubusercontent.com", "domain:githubassets.com",
-	"domain:spotify.com", "domain:netflix.com"
+	"domain:spotify.com", "domain:netflix.com", "domain:telegram.org", "domain:t.me"
 ];
+
 
 // lc() опускает только латиницу; кириллицу приводим сами, попарно по UTF-8
 // (ucode работает с байтами, поэтому идём по двухбайтовым буквам).
@@ -328,11 +323,24 @@ function build(opts) {
 	push(outs, { tag: "direct", protocol: "freedom", settings: {} });
 	push(outs, { tag: "block", protocol: "blackhole", settings: {} });
 
-	// Порядок как в профиле DEFAULT: block -> proxy (явно) -> direct -> proxy.
+	// Схемы маршрутизации на geo-файлах fast4g.ru:
+	//   lte  («обход БС»):  напрямую только whitelist/private, всё остальное — в туннель
+	//   wifi («домашний»):  по умолчанию напрямую; youtube -> секция yt,
+	//                       russian-block (заблокированное в РФ) -> секция eu
 	let rules = [];
 	let geo = (opts.geo === true);
 	let geo_site = (opts.geo_site != null) ? opts.geo_site : "geosite.dat";
 	let geo_ip = (opts.geo_ip != null) ? opts.geo_ip : "geoip.dat";
+	let site = function (tag) { return "ext:" + geo_site + ":" + tag; };
+	let ipt = function (tag) { return "ext:" + geo_ip + ":" + tag; };
+	let target_rule = function (tg) {
+		let r = { type: "field" };
+		if (tg.balancerTag != null)
+			r.balancerTag = tg.balancerTag;
+		else
+			r.outboundTag = tg.outboundTag;
+		return r;
+	};
 
 	let ytg = null, eug = null, autog = null;
 	for (let g in groups) {
@@ -343,70 +351,62 @@ function build(opts) {
 		else if (g.tag == "auto")
 			autog = g;
 	}
-	// куда идёт всё «запрещённое в РФ»
-	let main_g = (opts.mode == "lte") ? autog : eug;
 
-	// 1) блок-листы
-	if (geo) {
-		let bd = [];
-		for (let tag in BLOCK_TAGS)
-			push(bd, "ext:" + geo_site + ":" + tag);
-		push(rules, { type: "field", domain: bd, outboundTag: "block" });
-	}
-
-	// 2) YouTube -> секция yt (только в «домашнем интернете»)
-	if (opts.mode != "lte" && ytg != null) {
-		let rule = { type: "field",
-		             domain: geo ? [ "ext:" + geo_site + ":youtube" ] : YT_DOMAINS };
-		let tg = target_for(ytg);
-		if (tg.balancerTag != null)
-			rule.balancerTag = tg.balancerTag;
-		else
-			rule.outboundTag = tg.outboundTag;
-		push(rules, rule);
-	}
-
-	// 3) приоритетный туннель: telegram, ChatGPT/Claude, meta, X, Discord, GitHub
-	if (main_g != null) {
-		let pd = [];
-		for (let d in PROXY_DOMAINS)
-			push(pd, d);
+	// белые списки мобильного интернета + приватные диапазоны — всегда напрямую
+	let push_direct = function () {
+		let r1 = { type: "field", outboundTag: "direct" };
+		let r2 = { type: "field", outboundTag: "direct" };
 		if (geo) {
-			for (let tag in PROXY_TAGS)
-				push(pd, "ext:" + geo_site + ":" + tag);
+			r1.domain = [ site("WHITELIST"), site("PRIVATE") ];
+			r2.ip = [ ipt("WHITELIST"), ipt("PRIVATE") ];
+		} else {
+			r1.domain = [ "geosite:whitelist", "geosite:private" ];
+			r2.ip = [ "geoip:whitelist", "geoip:private" ];
 		}
-		let rule = { type: "field", domain: pd };
-		let tg = target_for(main_g);
-		if (tg.balancerTag != null)
-			rule.balancerTag = tg.balancerTag;
-		else
-			rule.outboundTag = tg.outboundTag;
-		push(rules, rule);
-	}
+		push(rules, r1);
+		push(rules, r2);
+	};
 
-	// 4) белые списки РФ — напрямую
-	if (geo) {
-		let dd = [];
-		for (let tag in DIRECT_TAGS)
-			push(dd, "ext:" + geo_site + ":" + tag);
-		push(rules, { type: "field", domain: dd, outboundTag: "direct" });
-		push(rules, { type: "field",
-		              ip: [ "ext:" + geo_ip + ":private", "ext:" + geo_ip + ":direct" ],
-		              outboundTag: "direct" });
-	}
-
-	// 5) всё остальное — в туннель
-	if (main_g != null) {
-		let tg = target_for(main_g);
-		let fin = { type: "field", network: "tcp,udp" };
-		if (tg.balancerTag != null)
-			fin.balancerTag = tg.balancerTag;
-		else
-			fin.outboundTag = tg.outboundTag;
-		push(rules, fin);
+	if (opts.mode == "lte") {
+		// обход БС: напрямую только белый список, остальное — в туннель
+		push_direct();
+		if (autog != null) {
+			let r = target_rule(target_for(autog));
+			r.network = "tcp,udp";
+			push(rules, r);
+		} else {
+			push(rules, { type: "field", network: "tcp,udp", outboundTag: "direct" });
+		}
 	} else {
+		// домашний интернет: youtube -> yt, заблокированное в РФ -> eu, остальное напрямую
+		if (ytg != null) {
+			let r1 = target_rule(target_for(ytg));
+			r1.domain = geo ? [ site("YOUTUBE") ] : YT_DOMAINS;
+			push(rules, r1);
+			if (geo) {
+				let r2 = target_rule(target_for(ytg));
+				r2.ip = [ ipt("YOUTUBE") ];
+				push(rules, r2);
+			}
+		}
+		push_direct();
+		if (eug != null) {
+			if (geo) {
+				let r1 = target_rule(target_for(eug));
+				r1.domain = [ site("RUSSIAN-BLOCK") ];
+				push(rules, r1);
+				let r2 = target_rule(target_for(eug));
+				r2.ip = [ ipt("RUSSIAN-BLOCK") ];
+				push(rules, r2);
+			} else {
+				let r1 = target_rule(target_for(eug));
+				r1.domain = PROXY_DOMAINS;
+				push(rules, r1);
+			}
+		}
 		push(rules, { type: "field", network: "tcp,udp", outboundTag: "direct" });
 	}
+
 	let inbounds = [ {
 		tag: "socks-in",
 		listen: "127.0.0.1",

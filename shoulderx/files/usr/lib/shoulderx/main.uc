@@ -75,8 +75,8 @@ const SERVICES = [
 // geo-файлы RoscomVPN (профиль WHITELIST): whitelist-домены и адреса РФ идут
 // напрямую, всё остальное — в туннель. Качаются ОТДЕЛЬНО от подписки и только
 // через туннель: напрямую jsDelivr из РФ часто недоступен.
-const GEOIP_URL = "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geoip/release/geoip.dat";
-const GEOSITE_URL = "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geosite/release/geosite.dat";
+const GEOIP_URL = "https://github.com/BranchSeeker/fast4g.ru-geo-files/releases/latest/download/geoip.dat";
+const GEOSITE_URL = "https://github.com/BranchSeeker/fast4g.ru-geo-files/releases/latest/download/geosite.dat";
 const GEO_TTL = 604800;
 
 const CHECK_TIMEOUT = 7;
