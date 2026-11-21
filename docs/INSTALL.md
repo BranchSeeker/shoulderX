@@ -12,8 +12,16 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 Установщик делает шаги 0–3 сам: проверяет платформу, ставит Xray (бинарник из
 релиза под архитектуру), ставит пакеты, настраивает подписку и собирает конфиг.
 Флаги: `--url=`, `--mode=lte|wifi`, `--lte-filter=`, `--wifi-filter=`,
-`--no-tproxy`, `--xray-from-upstream`, `--xray-from-feed`, `--dry-run`,
-`--uninstall [--purge]`.
+`--no-tproxy`, `--xray-from-upstream`, `--xray-from-feed`, `--mirror=`,
+`--dry-run`, `--uninstall [--purge]`.
+
+Если GitHub недоступен, установщик перебирает прокси-зеркала сам
+(`gh-proxy.com`, `ghfast.top`, `ghproxy.net`), а сам скрипт берётся через
+jsDelivr:
+
+```sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.3.1/installer/shoulderx-install.sh | sh
+```
 
 Дальше — ручной путь, если ставить по шагам.
 

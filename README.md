@@ -115,6 +115,23 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
   | sh -s -- --url='https://sub.example.com/TOKEN' --mode=lte
 ```
 
+### Если GitHub недоступен
+
+Установщик сам перебирает прокси-зеркала (`gh-proxy.com`, `ghfast.top`,
+`ghproxy.net`) для пакетов и Xray. Сам скрипт можно взять через jsDelivr:
+
+```sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.3.1/installer/shoulderx-install.sh | sh
+```
+
+Своё зеркало (префикс к адресам GitHub):
+
+```sh
+… | sh -s -- --mirror=https://gh-proxy.com/
+# или
+SHOULDERX_MIRROR=https://gh-proxy.com/ sh shoulderx-install.sh
+```
+
 Флаги: `--mode=lte|wifi`, `--lte-filter=`, `--wifi-filter=`, `--no-tproxy`,
 `--xray-from-upstream`, `--xray-from-feed`, `--no-apply`, `--dry-run`,
 `--uninstall [--purge]`.

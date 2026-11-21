@@ -20,6 +20,11 @@ set -u
 REPO="BranchSeeker/shoulderX"
 REL_BASE="https://github.com/${REPO}/releases/latest/download"
 
+# GitHub в РФ бывает недоступен. Прокси-зеркала работают как префикс:
+# https://gh-proxy.com/https://github.com/... — качаем с первого рабочего.
+# Свой список: --mirror=https://префикс/ или SHOULDERX_MIRROR=...
+MIRRORS="https://gh-proxy.com/ https://ghfast.top/ https://ghproxy.net/"
+
 XRAY_VERSION="26.10.21"
 XRAY_TAG="v26.10.21"
 XRAY_PKG_VERSION="26.10.21-r1"
@@ -36,6 +41,7 @@ DO_APPLY=1
 DO_UNINSTALL=0
 PURGE=0
 DRY=0
+CUSTOM_MIRROR="${SHOULDERX_MIRROR:-}"
 
 # --- состояние --------------------------------------------------------------
 DISTRIB_ID=""
@@ -55,7 +61,7 @@ fi
 
 step() { printf '\n%s==> %s%s\n' "$C_B" "$1" "$C_R"; }
 ok()   { printf '  %sok%s %s\n' "$C_G" "$C_R" "$1"; }
-warn() { printf '  %s!%s %s\n' "$C_Y" "$C_R" "$1"; }
+warn() { printf '  %s!%s %s\n' "$C_Y" "$C_R" "$1" >&2; }
 err()  { printf '  %sX%s %s\n' "$C_RED" "$C_R" "$1" >&2; }
 info() { printf '    %s\n' "$1"; }
 
@@ -140,6 +146,35 @@ xray_hash() {   # sha256 архива Xray для архитектуры
 		64)        echo "0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978" ;;
 		32)        echo "dde802c3c932aa1b8cdc5010de81b54719ff5e334f7c4800354825ed6c9d68b6" ;;
 	esac
+}
+
+# --- зеркала GitHub ---------------------------------------------------------
+# url_candidates <url> — сначала прямой адрес, затем через прокси-префиксы.
+url_candidates() {
+	printf '%s\n' "$1"
+	for m in $MIRRORS; do
+		printf '%s\n' "${m}$1"
+	done
+	if [ -n "$CUSTOM_MIRROR" ]; then
+		printf '%s\n' "${CUSTOM_MIRROR%/}/$1"
+	fi
+}
+
+fetch_any() {   # fetch_any <url> -> stdout, первый рабочий источник
+	for u in $(url_candidates "$1"); do
+		if fetch "$u"; then return 0; fi
+	done
+	return 1
+}
+
+dl_any() {      # dl_any <url> <file>
+	for u in $(url_candidates "$1"); do
+		if dl "$u" "$2"; then
+			return 0
+		fi
+		rm -f "$2" 2>/dev/null
+	done
+	return 1
 }
 
 pkg_add() {     # pkg_add <файлы...>
@@ -260,8 +295,8 @@ install_xray() {
 		name="xray-${XRAY_VERSION}-${XRAY_ASSET}.zip"
 		if [ "$DRY" = "1" ]; then
 			ok "(dry-run) скачал бы ${REL_BASE}/${name}"
-		elif dl "${REL_BASE}/${name}" "$TMPDIR/xray.zip" 2>/dev/null; then
-			want=$(fetch "${REL_BASE}/xray-checksums.txt" 2>/dev/null | awk -v n="$name" '$2==n {print $1}' | head -n 1)
+		elif dl_any "${REL_BASE}/${name}" "$TMPDIR/xray.zip" 2>/dev/null; then
+			want=$(fetch_any "${REL_BASE}/xray-checksums.txt" 2>/dev/null | awk -v n="$name" '$2==n {print $1}' | head -n 1)
 			if verify_sha256 "$TMPDIR/xray.zip" "$want" && unpack_xray "$TMPDIR/xray.zip" "релиз shoulderX"; then
 				setup_xray_service
 				return 0
@@ -276,7 +311,7 @@ install_xray() {
 		name="Xray-linux-${XRAY_ASSET}.zip"
 		if [ "$DRY" = "1" ]; then
 			ok "(dry-run) скачал бы ${XRAY_UPSTREAM}/${name}"
-		elif dl "${XRAY_UPSTREAM}/${name}" "$TMPDIR/xray.zip" 2>/dev/null; then
+		elif dl_any "${XRAY_UPSTREAM}/${name}" "$TMPDIR/xray.zip" 2>/dev/null; then
 			if verify_sha256 "$TMPDIR/xray.zip" "$(xray_hash "$XRAY_ASSET")" && \
 			   unpack_xray "$TMPDIR/xray.zip" "upstream XTLS ${XRAY_TAG}"; then
 				setup_xray_service
@@ -306,7 +341,7 @@ install_packages() {
 
 	if [ "$PKG_MANAGER" = "apk" ]; then ext="apk"; else ext="ipk"; fi
 
-	sums=$(fetch "${REL_BASE}/SHA256SUMS" 2>/dev/null)
+	sums=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
 	[ -n "$sums" ] || die "не смог получить SHA256SUMS из последнего релиза (нет сети?)"
 
 	files=$(printf '%s\n' "$sums" | awk -v e="$ext" '$2 ~ ("\\." e "$") {print $2}')
@@ -316,7 +351,7 @@ install_packages() {
 		info "качаю $f"
 		[ "$DRY" = "0" ] || continue
 		mkdir -p "$TMPDIR"
-		dl "${REL_BASE}/${f}" "$TMPDIR/$f" || die "не скачался $f"
+		dl_any "${REL_BASE}/${f}" "$TMPDIR/$f" || die "не скачался $f"
 		want=$(printf '%s\n' "$sums" | awk -v n="$f" '$2==n {print $1}')
 		verify_sha256 "$TMPDIR/$f" "$want" || die "sha256 не совпал: $f"
 	done
@@ -431,6 +466,7 @@ shoulderX installer
   --mode=lte|wifi       режим (по умолчанию — из пакета: lte)
   --lte-filter=X        фильтр групп для «обхода БС» (по умолчанию LTE)
   --wifi-filter=X       фильтр групп для «домашнего интернета» (WiFi)
+  --mirror=URL          своё зеркало GitHub (префикс, напр. https://gh-proxy.com/)
   --no-tproxy           не включать прозрачный прокси для LAN
   --xray-from-upstream  ставить Xray только с XTLS (не из релиза)
   --xray-from-feed      ставить xray-core из фида OpenWrt
@@ -450,6 +486,7 @@ for arg in "$@"; do
 		--mode=*)             MODE="${arg#*=}" ;;
 		--lte-filter=*)       LTE_FILTER="${arg#*=}" ;;
 		--wifi-filter=*)      WIFI_FILTER="${arg#*=}" ;;
+		--mirror=*)           CUSTOM_MIRROR="${arg#*=}" ;;
 		--no-tproxy)          NO_TPROXY=1 ;;
 		--xray-from-upstream) XRAY_SRC="upstream" ;;
 		--xray-from-feed)     XRAY_SRC="feed" ;;
