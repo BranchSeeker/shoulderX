@@ -493,9 +493,14 @@ ensure_geo() {
 		return 0
 	fi
 	mkdir -p /usr/share/xray
+	# сначала jsDelivr (доступен из РФ), потом ассеты релиза
+	tag=$(sed -n 's/-r[0-9][0-9]*$//p' /usr/lib/shoulderx/version 2>/dev/null | head -n 1)
+	[ -n "$tag" ] || tag="main"
+	js="https://cdn.jsdelivr.net/gh/${REPO}@v${tag}/shoulderx/files/usr/share/xray"
 	for f in geoip.dat geosite.dat; do
+		dl "$js/$f" "/usr/share/xray/$f" 2>/dev/null && [ -s "/usr/share/xray/$f" ] && { ok "$f установлен (jsDelivr)"; continue; }
 		if dl_any "${REL_BASE}/$f" "/usr/share/xray/$f" 2>/dev/null && [ -s "/usr/share/xray/$f" ]; then
-			ok "$f установлен"
+			ok "$f установлен (релиз)"
 		else
 			warn "$f не скачался — маршрутизация будет по доменным спискам"
 		fi

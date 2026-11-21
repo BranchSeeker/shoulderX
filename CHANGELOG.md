@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-11-22
+
+* geo-файлы тянутся через **jsDelivr** (он доступен из РФ там, где GitHub нет):
+  `cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v<версия>/shoulderx/files/usr/share/xray/*.dat`,
+  с откатом на `raw.githubusercontent.com` и на ассеты релиза.
+* Установщик при отсутствии geo-файлов тоже сначала пробует jsDelivr, потом релиз.
 ## 0.5.0 — 2026-11-22
 
 Переход на собственные geo-файлы [fast4g.ru-geo-files](https://github.com/BranchSeeker/fast4g.ru-geo-files)

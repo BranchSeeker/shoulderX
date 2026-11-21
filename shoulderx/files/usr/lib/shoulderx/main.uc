@@ -75,8 +75,11 @@ const SERVICES = [
 // geo-файлы RoscomVPN (профиль WHITELIST): whitelist-домены и адреса РФ идут
 // напрямую, всё остальное — в туннель. Качаются ОТДЕЛЬНО от подписки и только
 // через туннель: напрямую jsDelivr из РФ часто недоступен.
-const GEOIP_URL = "https://github.com/BranchSeeker/fast4g.ru-geo-files/releases/latest/download/geoip.dat";
-const GEOSITE_URL = "https://github.com/BranchSeeker/fast4g.ru-geo-files/releases/latest/download/geosite.dat";
+// Гео-файлы раздаём через jsDelivr (он доступен из РФ там, где GitHub нет),
+// с откатом на raw.githubusercontent и на ассеты релиза. Тег берём из
+// /usr/lib/shoulderx/version — он совпадает с тегом релиза.
+const REPO_SLUG = "BranchSeeker/shoulderX";
+
 const GEO_TTL = 604800;
 
 const CHECK_TIMEOUT = 7;
@@ -209,7 +212,31 @@ function init_path(want) {
 	return "/etc/init.d/shoulderx-xray";
 }
 
+// Тег релиза из /usr/lib/shoulderx/version ("0.5.0-r1" -> "v0.5.0").
+function geo_tag() {
+	let v = fs.readfile("/usr/lib/shoulderx/version");
+	if (v == null || trim(v) == "")
+		return "main";
+	v = trim(v);
+	let i = index(v, "-r");
+	if (i > 0)
+		v = substr(v, 0, i);
+	return "v" + v;
+}
+
+// Источники geo-файла: jsDelivr -> raw.githubusercontent -> ассеты релиза.
+function geo_urls(which) {
+	let tag = geo_tag();
+	let rel = "/shoulderx/files/usr/share/xray/" + which + ".dat";
+	return [
+		"https://cdn.jsdelivr.net/gh/" + REPO_SLUG + "@" + tag + rel,
+		"https://raw.githubusercontent.com/" + REPO_SLUG + "/" + tag + rel,
+		"https://github.com/" + REPO_SLUG + "/releases/latest/download/" + which + ".dat"
+	];
+}
+
 function settings() {
+
 	let c = uci.cursor();
 	c.load("shoulderx");
 
@@ -244,8 +271,8 @@ function settings() {
 		// маршрутизация по geo-файлам RoscomVPN (whitelist -> direct)
 		geo: (g("geo", "0") == "1"),
 		geo_dir: g("geo_dir", "/usr/share/xray"),
-		geoip_url: g("geoip_url", GEOIP_URL),
-		geosite_url: g("geosite_url", GEOSITE_URL),
+		geoip_url: as_list(g("geoip_url", ""), geo_urls("geoip")),
+		geosite_url: as_list(g("geosite_url", ""), geo_urls("geosite")),
 		geo_ttl: int(g("geo_ttl", "0"))
 	};
 }
@@ -566,10 +593,25 @@ function geo_download(s, via_proxy) {
 	for (let f in files) {
 		let dst = geo_path(s, f[1]);
 		let tmp = dst + ".new";
-		let r = fetchmod.download(f[0], { out: tmp, proxy: via_proxy, timeout: 60 });
-		if (!r.ok) {
-			res.error = f[1] + ": " + r.error;
+		let urls = as_list(f[0], []);
+		let r = null;
+		let err = "";
+
+		// источники по очереди: jsDelivr -> raw -> ассеты релиза
+		for (let u in urls) {
+			u = trim("" + u);
+			if (u == "")
+				continue;
+			r = fetchmod.download(u, { out: tmp, proxy: via_proxy, timeout: 45 });
+			if (r.ok)
+				break;
+			err = r.error;
 			system("rm -f '" + tmp + "' >/dev/null 2>&1");
+			r = null;
+		}
+
+		if (r == null) {
+			res.error = f[1] + ": " + err;
 			return res;
 		}
 		system("mv '" + tmp + "' '" + dst + "' >/dev/null 2>&1");
