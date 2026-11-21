@@ -86,10 +86,10 @@ fetch_secure() {   # $1 url -> stdout
 		curl -fsSL --connect-timeout 10 -m 60 "$1" 2>/dev/null && return 0
 	fi
 	if have wget; then
-		wget -q -T 60 -O - "$1" 2>/dev/null && return 0
+		run_to 25 wget -q -T 10 -t 1 -O - "$1" 2>/dev/null && return 0
 	fi
 	if have uclient-fetch; then
-		uclient-fetch -q -O - "$1" 2>/dev/null && return 0
+		run_to 25 uclient-fetch -q -O - "$1" 2>/dev/null && return 0
 	fi
 	return 1
 }
@@ -101,7 +101,7 @@ fetch() {   # fetch <url> -> stdout, с откатом на небезопасн
 	if have curl; then
 		curl -fsSL -k --connect-timeout 10 -m 60 "$1"
 	elif have wget; then
-		wget -q --no-check-certificate -T 60 -O - "$1"
+		run_to 25 wget -q --no-check-certificate -T 10 -t 1 -O - "$1"
 	elif have uclient-fetch; then
 		uclient-fetch -q --no-check-certificate -O - "$1"
 	else
@@ -129,7 +129,7 @@ dl_secure() {      # $1 url $2 file — с прогрессом, чтобы не
 		curl -fLsS --connect-timeout 10 -m "$DL_TIMEOUT" -o "$2" "$1" 2>/dev/null && return 0
 	fi
 	if have wget; then
-		run_to "$DL_TIMEOUT" wget -q -T 30 -O "$2" "$1" 2>/dev/null && return 0
+		run_to "$DL_TIMEOUT" wget -q -T 15 -t 1 -O "$2" "$1" 2>/dev/null && return 0
 	fi
 	if have uclient-fetch; then
 		run_to "$DL_TIMEOUT" uclient-fetch -q -O "$2" "$1" 2>/dev/null && return 0
@@ -211,14 +211,15 @@ pkg_add() {     # pkg_add <файлы...>
 # Загрузчик и сертификаты: на голой прошивке бывает ни curl, ни ca-bundle.
 # Ставим сами (пакет из фида), прежде чем что-то качать.
 ensure_downloader() {
-	if ! have curl && ! have wget && ! have uclient-fetch; then
-		info "нет curl/wget — ставлю curl из фида"
+	if ! have curl; then
+		info "ставлю curl из фида (он надёжнее busybox-wget)"
 		if [ "$DRY" = "0" ]; then
 			if [ "$PKG_MANAGER" = "apk" ]; then
-				apk add curl >/dev/null 2>&1
+				run_to 60 apk update >/dev/null 2>&1
+				run_to 60 apk add curl >/dev/null 2>&1
 			else
-				opkg update >/dev/null 2>&1 || true
-				opkg install curl >/dev/null 2>&1
+				run_to 60 opkg update >/dev/null 2>&1
+				run_to 60 opkg install curl >/dev/null 2>&1
 			fi
 		fi
 	fi
@@ -247,8 +248,27 @@ ensure_downloader() {
 
 # Проверка сети до релиза: один раз тянем SHA256SUMS (он всё равно нужен),
 # и сразу понимаем, проходит ли TLS и доступен ли GitHub/зеркало.
+# Часы роутера без NTP уезжают на месяцы — тогда TLS «не проходит», и это
+# выглядит как «нет сети». Пробуем синхронизировать время, если есть ntpd.
+try_time_sync() {
+	have ntpd || return 1
+	info "TLS не проходит — синхронизирую время (ntpd -q)"
+	run_to 25 ntpd -q -n -p 1.1.1.1 >/dev/null 2>&1 || \
+	run_to 25 ntpd -q -n -p pool.ntp.org >/dev/null 2>&1 || return 1
+	info "часы: $(date 2>/dev/null)"
+	return 0
+}
+
 preflight_net() {
-	SUMS=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
+	SUMS=$(fetch_secure "${REL_BASE}/SHA256SUMS" 2>/dev/null | head -c 4096)
+	if [ -z "$SUMS" ] && [ "$DRY" = "0" ]; then
+		# возможно, дело в часах: синхронизируем и пробуем ещё раз
+		if try_time_sync; then
+			SUMS=$(fetch_secure "${REL_BASE}/SHA256SUMS" 2>/dev/null | head -c 4096)
+		fi
+	fi
+	[ -n "$SUMS" ] || SUMS=$(fetch_any "${REL_BASE}/SHA256SUMS" 2>/dev/null)
+
 	if [ -n "$SUMS" ]; then
 		ok "релиз доступен (SHA256SUMS получен)"
 	else
