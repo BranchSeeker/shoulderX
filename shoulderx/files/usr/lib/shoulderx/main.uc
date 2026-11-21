@@ -246,7 +246,7 @@ function settings() {
 		geo_dir: g("geo_dir", "/usr/share/xray"),
 		geoip_url: g("geoip_url", GEOIP_URL),
 		geosite_url: g("geosite_url", GEOSITE_URL),
-		geo_ttl: int(g("geo_ttl", "" + GEO_TTL))
+		geo_ttl: int(g("geo_ttl", "0"))
 	};
 }
 function parse_args(argv) {
@@ -535,11 +535,17 @@ function geo_age(s, which) {
 	return time() - st.mtime;
 }
 // Нужно ли (пере)качать geo: файлов нет или они старше TTL.
+// geo_ttl = 0 — не обновлять автоматически: файлы едут в пакете, обновление
+// вручную (`shoulderx geo`) или вместе с пакетом. Иначе каждая сборка в сети
+// без доступа к CDN висела бы на таймаутах.
 function geo_need(s) {
 	if (!s.geo)
 		return false;
-	return (geo_age(s, "geoip.dat") < 0 || geo_age(s, "geosite.dat") < 0 ||
-	        geo_age(s, "geoip.dat") > s.geo_ttl || geo_age(s, "geosite.dat") > s.geo_ttl);
+	if (geo_age(s, "geoip.dat") < 0 || geo_age(s, "geosite.dat") < 0)
+		return true;
+	if (s.geo_ttl <= 0)
+		return false;
+	return (geo_age(s, "geoip.dat") > s.geo_ttl || geo_age(s, "geosite.dat") > s.geo_ttl);
 }
 // Готовы ли файлы для конфига.
 function geo_ready(s) {
@@ -555,7 +561,7 @@ function geo_download(s, via_proxy) {
 	for (let f in files) {
 		let dst = geo_path(s, f[1]);
 		let tmp = dst + ".new";
-		let r = fetchmod.download(f[0], { out: tmp, proxy: via_proxy, timeout: 180 });
+		let r = fetchmod.download(f[0], { out: tmp, proxy: via_proxy, timeout: 60 });
 		if (!r.ok) {
 			res.error = f[1] + ": " + r.error;
 			system("rm -f '" + tmp + "' >/dev/null 2>&1");

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shoulderx
-PKG_VERSION:=0.3.5
+PKG_VERSION:=0.4.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -13,7 +13,7 @@ define Package/shoulderx
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Xray config generator from a subscription
-  DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +curl +ca-bundle
+  DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +curl +ca-bundle +nftables +kmod-nft-tproxy
   PKGARCH:=all
 endef
 
@@ -59,13 +59,16 @@ define Package/shoulderx/install
 		$(1)/etc/config \
 		$(1)/etc/init.d \
 		$(1)/usr/bin \
-		$(1)/usr/lib/shoulderx
+		$(1)/usr/lib/shoulderx \
+		$(1)/usr/share/xray
 
 	$(INSTALL_CONF) ./files/etc/config/shoulderx $(1)/etc/config/shoulderx
 	$(INSTALL_BIN)  ./files/etc/init.d/shoulderx $(1)/etc/init.d/shoulderx
 	$(INSTALL_BIN)  ./files/usr/bin/shoulderx $(1)/usr/bin/shoulderx
 	$(INSTALL_BIN)  ./files/etc/init.d/shoulderx-xray $(1)/etc/init.d/shoulderx-xray
 	$(INSTALL_DATA) ./files/usr/lib/shoulderx/*.uc $(1)/usr/lib/shoulderx/
+	$(INSTALL_DATA) ./files/usr/share/xray/geoip.dat $(1)/usr/share/xray/geoip.dat
+	$(INSTALL_DATA) ./files/usr/share/xray/geosite.dat $(1)/usr/share/xray/geosite.dat
 	echo "$(PKG_VERSION)-r$(PKG_RELEASE)" > $(1)/usr/lib/shoulderx/version
 endef
 

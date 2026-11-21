@@ -67,6 +67,18 @@ jobs:
             grep -q "Xray-linux-$a.zip" installer/xray-checksums.txt || { echo "нет суммы для $a"; exit 1; }
           done
 
+      - name: geo-файлы в пакете
+        run: |
+          set -e
+          for f in shoulderx/files/usr/share/xray/geoip.dat shoulderx/files/usr/share/xray/geosite.dat; do
+            test -s "$f" || { echo "нет $f"; exit 1; }
+            # отсеиваем случайно закоммиченный HTML вместо .dat
+            size=$(wc -c < "$f")
+            test "$size" -gt 20000 || { echo "$f подозрительно маленький: $size"; exit 1; }
+            head -c 64 "$f" | grep -qiE '<html|<!doctype' && { echo "$f — это HTML, не geo"; exit 1; }
+            echo "$f: $size байт"
+          done
+
       - name: shell-скрипты
         run: |
           set -e
@@ -219,7 +231,9 @@ jobs:
           test "$(ls -1 out/*.ipk | wc -l)" -eq 2
           cp installer/shoulderx-install.sh out/
           cp installer/LICENSE-xray.txt out/
-          (cd out && sha256sum *.apk *.ipk shoulderx-install.sh > SHA256SUMS)
+          cp shoulderx/files/usr/share/xray/geoip.dat out/
+          cp shoulderx/files/usr/share/xray/geosite.dat out/
+          (cd out && sha256sum *.apk *.ipk shoulderx-install.sh geoip.dat geosite.dat > SHA256SUMS)
           cat out/SHA256SUMS
 
       - name: Зеркало Xray в релиз
@@ -248,6 +262,8 @@ jobs:
             out/*.ipk
             out/SHA256SUMS
             out/shoulderx-install.sh
+            out/geoip.dat
+            out/geosite.dat
             out/xray-*.zip
             out/xray-checksums.txt
             out/LICENSE-xray.txt

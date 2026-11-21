@@ -121,7 +121,7 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 `ghproxy.net`) для пакетов и Xray. Сам скрипт можно взять через jsDelivr:
 
 ```sh
-wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.3.5/installer/shoulderx-install.sh | sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.4.0/installer/shoulderx-install.sh | sh
 ```
 
 Своё зеркало (префикс к адресам GitHub):

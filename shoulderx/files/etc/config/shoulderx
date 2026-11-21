@@ -31,10 +31,11 @@ config settings 'settings'
 	option tproxy_port '0'
 
 	# Маршрутизация по geo-файлам RoscomVPN: whitelist (РФ) -> напрямую,
-	# всё остальное -> в туннель. Файлы качаются через туннель (shoulderx geo).
-	option geo '0'
+	# всё остальное -> в туннель. Сами файлы едут в пакете (/usr/share/xray).
+	option geo '1'
 	option geo_dir '/usr/share/xray'
-	option geo_ttl '604800'
+	# 0 — не обновлять geo автоматически; refresh вручную: shoulderx geo
+	option geo_ttl '0'
 
 	# Куда писать готовый конфиг Xray.
 	option config_path '/etc/xray/config.json'

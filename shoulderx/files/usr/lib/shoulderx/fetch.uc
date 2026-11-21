@@ -80,10 +80,20 @@ function download(url, opts) {
 
 	let body = (opts.out != null) ? opts.out : tmpfile("sub");
 	let maxt = (opts.timeout != null) ? opts.timeout : MAX_TIME;
-	let code = cmd_out("curl -sS -4 -o '" + body + "' -w '%{http_code}' " +
+	let args = "-sS -4 -o '" + body + "' -w '%{http_code}' " +
 		"--connect-timeout " + CONNECT_TIMEOUT + " -m " + maxt + " " +
-		prox + "-A '" + ua + "' " + hdr + "'" + url + "'");
+		prox + "-A '" + ua + "' " + hdr + "'" + url + "'";
+	let code = cmd_out("curl " + args);
 
+	// Часы роутера часто врут (нет NTP) — падает проверка сертификата, и это
+	// выглядит как «нет связи». Пробуем ещё раз без проверки TLS.
+	if ((code == "000" || code == "") && index("" + url, "https://") == 0) {
+		code = cmd_out("curl -k " + args);
+		if (code == "200") {
+			let now = cmd_out("date");
+			system("logger -t shoulderx 'TLS не проверялся (часы: " + now + ")'");
+		}
+	}
 	let res = { ok: false, code: code, body: "", error: "" };
 	if (opts.out != null) {
 		// файл: читать в память не нужно, только проверить размер

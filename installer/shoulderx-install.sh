@@ -434,6 +434,54 @@ install_xray() {	step "Xray $XRAY_VERSION"
 	setup_xray_service
 }
 
+# --- 2.5 зависимости --------------------------------------------------------
+# Всё, что нужно shoulderx в работе: ucode с модулями, curl, сертификаты,
+# nftables + tproxy для прозрачного прокси, unzip — для архива Xray.
+RUNTIME_DEPS="ucode ucode-mod-fs ucode-mod-uci curl ca-bundle nftables kmod-nft-tproxy unzip"
+
+install_deps() {
+	step "Зависимости"
+	if [ "$DRY" = "1" ]; then
+		ok "(dry-run) поставил бы: $RUNTIME_DEPS"
+		return 0
+	fi
+	if [ "$PKG_MANAGER" = "apk" ]; then
+		# по одному: если какого-то пакета нет в фиде, остальные всё равно встанут
+		for d in $RUNTIME_DEPS; do
+			apk add "$d" >/dev/null 2>&1 || warn "не удалось поставить $d (пропускаю)"
+		done
+	else
+		opkg update >/dev/null 2>&1 || true
+		for d in $RUNTIME_DEPS; do
+			opkg install "$d" >/dev/null 2>&1 || warn "не удалось поставить $d (пропускаю)"
+		done
+	fi
+	ok "зависимости на месте"
+}
+
+# geo-файлы едут в пакете; если их почему-то нет — берём из релиза.
+ensure_geo() {
+	step "geo-файлы (маршрутизация по спискам)"
+	gi=/usr/share/xray/geoip.dat
+	gs=/usr/share/xray/geosite.dat
+	if [ "$DRY" = "0" ] && [ -s "$gi" ] && [ -s "$gs" ]; then
+		ok "уже на месте: geoip $(wc -c < "$gi") б, geosite $(wc -c < "$gs") б"
+		return 0
+	fi
+	if [ "$DRY" = "1" ]; then
+		ok "(dry-run) скачал бы geoip.dat/geosite.dat из релиза"
+		return 0
+	fi
+	mkdir -p /usr/share/xray
+	for f in geoip.dat geosite.dat; do
+		if dl_any "${REL_BASE}/$f" "/usr/share/xray/$f" 2>/dev/null && [ -s "/usr/share/xray/$f" ]; then
+			ok "$f установлен"
+		else
+			warn "$f не скачался — маршрутизация будет по доменным спискам"
+		fi
+	done
+}
+
 # --- 3. пакеты --------------------------------------------------------------
 install_packages() {
 	step "Пакеты shoulderX"
@@ -624,7 +672,9 @@ else
 	install_xray
 fi
 
+install_deps
 install_packages
+ensure_geo
 configure
 [ "$DO_APPLY" = "1" ] && run_apply
 summary
