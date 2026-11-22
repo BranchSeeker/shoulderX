@@ -626,6 +626,11 @@ return view.extend({
 		o.default = '0';
 		o.rmempty = false;
 
+		o = s.option(form.Flag, 'auto_update', _('Обновлять shoulderX автоматически'),
+			_('Раз в сутки (04:17) проверять релиз и ставить его: архив качается через туннель, установка офлайн.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.option(form.ListValue, 'update_interval', _('Период обновления'));
 		[ '1h', '3h', '6h', '12h', '1d' ].forEach(function (v) { o.value(v, v); });
 		o.default = '6h';

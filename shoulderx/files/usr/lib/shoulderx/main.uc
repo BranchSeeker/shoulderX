@@ -79,6 +79,8 @@ const SERVICES = [
 // с откатом на raw.githubusercontent и на ассеты релиза. Тег берём из
 // /usr/lib/shoulderx/version — он совпадает с тегом релиза.
 const REPO_SLUG = "BranchSeeker/shoulderX";
+// зеркала для случаев, когда GitHub недоступен напрямую
+const MIRRORS_GITHUB = [ "https://gh-proxy.com/", "https://ghfast.top/" ];
 
 const GEO_TTL = 604800;
 
@@ -268,6 +270,7 @@ function settings() {
 		restart: g("restart_cmd", "/etc/init.d/xray restart"),
 		schedule: (g("enable_schedule", "0") == "1"),
 		interval: g("update_interval", "6h"),
+		auto_update: g("auto_update", "1") == "1",
 		// маршрутизация по geo-файлам RoscomVPN (whitelist -> direct)
 		geo: (g("geo", "0") == "1"),
 		geo_dir: g("geo_dir", "/usr/share/xray"),
@@ -325,6 +328,12 @@ function parse_args(argv) {
 			a.yt_exclude = substr(v, 13);
 		else if (substr(v, 0, 13) == "--eu-exclude=")
 			a.eu_exclude = substr(v, 13);
+		else if (v == "--check")
+			a.check = true;
+		else if (v == "--force")
+			a.force = true;
+		else if (v == "--no-restart")
+			a.no_restart = true;
 		else if (v == "--async")
 			a.async = true;
 		else if (v == "--worker")
@@ -984,7 +993,161 @@ function cmd_mode(a) {
 	return cmd_apply(aa);
 }
 
+// ── автообновление самого shoulderX ────────────────────────────────────────
+// Обновление качается ЧЕРЕЗ ТУННЕЛЬ (socks рядом), затем ставится локально:
+// в релизе лежит архив shoulderx-<версия>-<apk|ipk>.tar.gz с пакетами и
+// geo-файлами, поэтому установка офлайн и без повторных запросов.
+
+function ver_parts(v) {
+	let out = [];
+	for (let x in split("" + v, "."))
+		push(out, int(x));
+	return out;
+}
+
+function ver_gt(a, b) {
+	let pa = ver_parts(a), pb = ver_parts(b);
+	for (let i = 0; i < 3; i++) {
+		let x = (i < length(pa)) ? pa[i] : 0;
+		let y = (i < length(pb)) ? pb[i] : 0;
+		if (x > y) return true;
+		if (x < y) return false;
+	}
+	return false;
+}
+
+function installed_version() {
+	let v = fs.readfile("/usr/lib/shoulderx/version");
+	if (v == null)
+		return "0.0.0";
+	v = trim(v);
+	let i = index(v, "-r");
+	return (i > 0) ? substr(v, 0, i) : v;
+}
+
+// curl через туннель (если socks поднят), иначе напрямую; при неудаче — зеркала
+function gh_fetch(s, url, out_file) {
+	let px = "";
+	if (s.socks_port > 0 && trim(fetchmod.cmd_out("pidof xray")) != "")
+		px = "-x socks5h://127.0.0.1:" + s.socks_port + " ";
+	let o = (out_file != null) ? ("-o '" + out_file + "'") : "";
+	let cmd = "curl -sS -m 40 --connect-timeout 8 " + px;
+	if (out_file != null)
+		return fetchmod.cmd_out(cmd + " " + o + " -w '%{http_code}' '" + url + "'");
+
+	let body = fetchmod.cmd_out(cmd + " '" + url + "'");
+	if (trim(body) != "")
+		return body;
+	body = fetchmod.cmd_out("curl -sS -m 40 '" + url + "'");
+	if (trim(body) != "")
+		return body;
+	for (let m in MIRRORS_GITHUB) {
+		body = fetchmod.cmd_out("curl -sS -m 40 '" + m + url + "'");
+		if (trim(body) != "")
+			return body;
+	}
+	return "";
+}
+
+function cmd_selfupdate(a) {
+	let s = settings();
+	let cur = installed_version();
+	let quiet = (a.quiet === true);
+
+	let api = "https://api.github.com/repos/" + REPO_SLUG + "/releases/latest";
+	let body = gh_fetch(s, api);
+	let mm = match(body, /"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)"/);
+	let tag = (mm != null) ? mm[1] : "";
+	if (tag == "") {
+		if (!quiet)
+			out("не удалось узнать последнюю версию (нет связи ни напрямую, ни через туннель)");
+		return 3;
+	}
+
+	let latest = (substr(tag, 0, 1) == "v") ? substr(tag, 1) : tag;
+	if (!ver_gt(latest, cur)) {
+		if (!quiet)
+			out("установлена последняя версия " + cur);
+		return 0;
+	}
+
+	if (!quiet)
+		out("доступна " + latest + " (установлена " + cur + ")");
+
+	if (a.check === true) {
+		out(latest);
+		return 0;
+	}
+
+	let ext = (fetchmod.cmd_out("command -v apk") != "") ? "apk" : "ipk";
+	let name = "shoulderx-" + latest + "-" + ext + ".tar.gz";
+	let base = "https://github.com/" + REPO_SLUG + "/releases/download/" + tag + "/";
+
+	let dir = "/tmp/shoulderx-update";
+	system("rm -rf " + dir + " && mkdir -p " + dir);
+
+	if (!quiet)
+		out("качаю " + name + " через туннель");
+	let code = gh_fetch(s, base + name, dir + "/pkg.tar.gz");
+	if (code != "200") {
+		out("не скачался архив обновления (" + code + ")");
+		return 4;
+	}
+
+	let sums = gh_fetch(s, base + "SHA256SUMS");
+	let want = "";
+	for (let line in split(sums, "\n")) {
+		let parts = split(trim(line), " ");
+		if (length(parts) >= 2 && parts[length(parts) - 1] == name)
+			want = parts[0];
+	}
+	if (want != "") {
+		let have = trim(fetchmod.cmd_out("sha256sum " + dir + "/pkg.tar.gz | cut -d' ' -f1"));
+		if (have != want) {
+			out("sha256 не совпал — обновление отменено");
+			return 5;
+		}
+	}
+
+	if (system("tar -xzf " + dir + "/pkg.tar.gz -C " + dir + " >/dev/null 2>&1") != 0) {
+		out("не удалось распаковать архив");
+		return 6;
+	}
+
+	let files = "";
+	for (let f in split(trim(fetchmod.cmd_out("ls " + dir)), "\n"))
+		push(files, dir + "/" + f);
+
+	let rc;
+	if (ext == "apk")
+		rc = system("apk add --allow-untrusted " + dir + "/*.apk >/dev/null 2>&1");
+	else
+		rc = system("opkg install " + dir + "/*.ipk >/dev/null 2>&1");
+	if (rc != 0) {
+		out("установка пакетов не прошла");
+		return 7;
+	}
+
+	// geo-файлы из архива (если приложены) — чтобы списки были ровно из релиза
+	if (fs.stat(dir + "/geoip.dat") != null && fs.stat(dir + "/geoip.dat").size > 1000)
+		system("cp -f " + dir + "/geoip.dat " + s.geo_dir + "/geoip.dat");
+	if (fs.stat(dir + "/geosite.dat") != null && fs.stat(dir + "/geosite.dat").size > 1000)
+		system("cp -f " + dir + "/geosite.dat " + s.geo_dir + "/geosite.dat");
+
+	// конфиг пересобираем новым кодом и перезапускаем xray без сети
+	system("/usr/bin/shoulderx gen --write --quiet >/dev/null 2>&1");
+	system("/usr/bin/shoulderx schedule >/dev/null 2>&1");
+	if (a.no_restart !== true)
+		system("/etc/init.d/xray restart >/dev/null 2>&1");
+
+	system("rm -rf " + dir);
+	system("logger -t shoulderx 'selfupdate: " + cur + " -> " + latest + "'");
+	out("обновлено: " + cur + " → " + latest);
+	return 0;
+}
+
 function cmd_status(a) {
+
 	let s = settings();
 	let state = read_state();
 	let st = {
@@ -1067,9 +1230,13 @@ function cmd_schedule(off) {
 		if (mins <= 60)
 			spec = "*/" + mins + " * * * *";
 		else
-			spec = "0 */" + int(mins / 60) + " * * * *";
+			spec = "0 */" + int(mins / 60) + " * * *";
 		push(kept, spec + " /usr/bin/shoulderx apply --quiet");
 	}
+
+	// автообновление самого shoulderX — раз в сутки ночью
+	if (s.auto_update === true)
+		push(kept, "17 4 * * * /usr/bin/shoulderx selfupdate --quiet");
 
 	ensure_dir("/etc/crontabs");
 	let body = "";
@@ -1446,6 +1613,8 @@ if (cmd == "fetch") {
 	exit(cmd_tproxy(a));
 } else if (cmd == "geo") {
 	exit(cmd_geo(a));
+} else if (cmd == "selfupdate") {
+	exit(cmd_selfupdate(a));
 } else if (cmd == "mode") {
 	exit(cmd_mode(a));
 } else if (cmd == "job") {

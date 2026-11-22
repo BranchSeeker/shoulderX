@@ -48,8 +48,11 @@ config settings 'settings'
 	option hwid ''
 
 	# Обновление конфига по расписанию.
-	option enable_schedule '0'
+	# Обновление подписки по расписанию (по умолчанию — каждые 6 часов)
+	option enable_schedule '1'
 	option update_interval '6h'
+	# Автообновление самого shoulderX: раз в сутки в 04:17 через туннель
+	option auto_update '1'
 
 	# Чем перезапускать Xray после записи конфига.
 	option restart_cmd '/etc/init.d/xray restart'

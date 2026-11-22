@@ -564,6 +564,8 @@ configure() {
 	uci -q commit shoulderx
 
 	/etc/init.d/shoulderx enable >/dev/null 2>&1 || true
+	# расписание: подписка каждые 6 ч + самообновление раз в сутки
+	/usr/bin/shoulderx schedule >/dev/null 2>&1 || true
 	ok "режим: $(uci -q get shoulderx.settings.mode)"
 	if [ -z "$(uci -q get shoulderx.settings.subscription_url)" ]; then
 		warn "ссылка подписки не задана — добавьте в LuCI"

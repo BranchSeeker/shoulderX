@@ -236,6 +236,25 @@ jobs:
           (cd out && sha256sum *.apk *.ipk shoulderx-install.sh geoip.dat geosite.dat > SHA256SUMS)
           cat out/SHA256SUMS
 
+      - name: Архивы для автообновления
+        # shoulderx-<версия>-<apk|ipk>.tar.gz: два пакета + geo-файлы.
+        # shoulderx selfupdate качает такой архив через туннель и ставит офлайн.
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^PKG_VERSION:=//p' version.mk)
+          REL=$(sed -n 's/^PKG_RELEASE:=//p' version.mk)
+          for ext in apk ipk; do
+            rm -rf stage && mkdir stage
+            cp out/*.$ext stage/
+            cp shoulderx/files/usr/share/xray/geoip.dat stage/
+            cp shoulderx/files/usr/share/xray/geosite.dat stage/
+            (cd stage && sha256sum * > SHA256SUMS)
+            tar -czf "out/shoulderx-${VER}-${ext}.tar.gz" -C stage .
+            echo "== shoulderx-${VER}-${ext}.tar.gz"
+            ls -lh "out/shoulderx-${VER}-${ext}.tar.gz"
+          done
+          rm -rf stage
+
       - name: Зеркало Xray в релиз
         run: |
           set -euo pipefail
@@ -262,6 +281,7 @@ jobs:
             out/*.ipk
             out/SHA256SUMS
             out/shoulderx-install.sh
+            out/shoulderx-*.tar.gz
             out/geoip.dat
             out/geosite.dat
             out/xray-*.zip
