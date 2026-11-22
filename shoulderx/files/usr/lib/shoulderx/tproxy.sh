@@ -38,11 +38,14 @@ save_dns() {
 
 	nr=$(uci -q get dhcp.@dnsmasq[0].noresolv)
 	srv=$(uci -q get dhcp.@dnsmasq[0].server)
-	printf '%s|%s\n' "${nr:-0}" "${srv:-}" > "$DNS_FILE"
+	fa=$(uci -q get dhcp.@dnsmasq[0].filter_aaaa)
+	printf '%s|%s|%s\n' "${nr:-0}" "${srv:-}" "${fa:-0}" > "$DNS_FILE"
 
 	uci set dhcp.@dnsmasq[0].noresolv='1'
 	uci -q delete dhcp.@dnsmasq[0].server
 	uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+	# LAN без IPv6: AAAA-ответы только мешают (клиент идёт в мёртвый IPv6)
+	uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1
 }
@@ -64,13 +67,20 @@ restore_dns() {
 
 	line=$(cat "$DNS_FILE" 2>/dev/null)
 	nr=${line%%|*}
-	srv=${line#*|}
+	rest=${line#*|}
+	srv=${rest%%|*}
+	fa=${rest#*|}
 
 	uci -q delete dhcp.@dnsmasq[0].server
 	for one in $srv; do
 		uci add_list dhcp.@dnsmasq[0].server="$one"
 	done
 	uci set dhcp.@dnsmasq[0].noresolv="${nr:-0}"
+	if [ "${fa:-0}" = "1" ]; then
+		uci set dhcp.@dnsmasq[0].filter_aaaa='1'
+	else
+		uci -q delete dhcp.@dnsmasq[0].filter_aaaa
+	fi
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1
 	rm -f "$DNS_FILE"
@@ -222,6 +232,14 @@ table inet $TABLE {
 	set nodes {
 		type ipv4_addr
 		flags interval
+	}
+	# отдельная nat-цепочка: redirect живёт только в nat-хуках
+	chain dnsnat {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname != "br-lan" return
+		ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } return
+		udp dport 53 redirect to :53
+		tcp dport 53 redirect to :53
 	}
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;

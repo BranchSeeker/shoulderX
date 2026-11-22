@@ -352,6 +352,20 @@ function build(opts) {
 			autog = g;
 	}
 
+	// DNS-запросы из dns-in всегда через туннель: провайдер перехватывает 53-й
+	// порт и на заблокированное отдаёт NXDOMAIN — с «прямым» DNS YouTube не
+	// открывается вовсе.
+	let dns_group = null;
+	if (opts.mode == "lte")
+		dns_group = autog;
+	else
+		dns_group = (eug != null) ? eug : autog;
+	if (geo && dns_group != null) {
+		let dr = target_rule(target_for(dns_group));
+		dr.inboundTag = [ "dns-in" ];
+		push(rules, dr);
+	}
+
 	// белые списки мобильного интернета + приватные диапазоны — всегда напрямую
 	let push_direct = function () {
 		let r1 = { type: "field", outboundTag: "direct" };
