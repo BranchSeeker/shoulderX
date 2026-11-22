@@ -20,7 +20,7 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 jsDelivr:
 
 ```sh
-wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.5.3/installer/shoulderx-install.sh | sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.5.4/installer/shoulderx-install.sh | sh
 ```
 
 Дальше — ручной путь, если ставить по шагам.

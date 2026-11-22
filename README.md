@@ -106,13 +106,26 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
   | sh -s -- --url='https://sub.example.com/TOKEN' --mode=lte
 ```
 
+### Откуда берётся Xray
+
+Установщик в режиме `auto` идёт по порядку:
+
+1. **фид OpenWrt**, если там ровно запиненная версия (сейчас `26.10.21`) — быстро,
+   штатный `/etc/init.d/xray`, обновляется вместе с прошивкой;
+2. **архив из релиза shoulderX** (`xray-26.10.21-<арх>.zip`) — если в фиде другой
+   версии нет или пакет не встал;
+3. **upstream XTLS** с проверкой sha256;
+4. фид с любой версией — последний вариант.
+
+Принудительно: `--xray-from-release`, `--xray-from-upstream`, `--xray-from-feed`.
+
 ### Если GitHub недоступен
 
 Установщик сам перебирает прокси-зеркала (`gh-proxy.com`, `ghfast.top`,
 `ghproxy.net`) для пакетов и Xray. Сам скрипт можно взять через jsDelivr:
 
 ```sh
-wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.5.3/installer/shoulderx-install.sh | sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.5.4/installer/shoulderx-install.sh | sh
 ```
 
 Своё зеркало (префикс к адресам GitHub):

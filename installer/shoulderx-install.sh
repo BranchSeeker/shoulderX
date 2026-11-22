@@ -5,8 +5,10 @@
 #
 # Что делает:
 #   1) проверяет платформу (OpenWrt, архитектура, apk/opkg, место на диске);
-#   2) ставит xray нужной версии: бинарник из релиза shoulderX (по архитектуре),
-#      иначе с upstream XTLS, иначе пакет из фида;
+#   2) ставит xray нужной версии. Порядок в режиме auto:
+#      фид (если там ровно наша версия — быстро и штатный init) ->
+#      архив из релиза shoulderX -> upstream XTLS -> фид (любая версия).
+#      Принудительно: --xray-from-release / --xray-from-upstream / --xray-from-feed;
 #   3) ставит пакеты shoulderx и luci-app-shoulderx из последнего релиза;
 #   4) настраивает подписку/режим и собирает конфиг (apply):
 #      подписка напрямую -> geo через туннель -> полный туннель + tproxy.
@@ -641,6 +643,7 @@ shoulderX installer
   --wifi-filter=X       фильтр групп для «домашнего интернета» (WiFi)
   --mirror=URL          своё зеркало GitHub (префикс, напр. https://gh-proxy.com/)
   --no-tproxy           не включать прозрачный прокси для LAN
+  --xray-from-release   ставить Xray только из релиза shoulderX (без фида)
   --xray-from-upstream  ставить Xray только с XTLS (не из релиза и не из фида)
   --xray-from-feed      ставить xray-core из фида OpenWrt
   --no-apply            только установить, конфиг не собирать
@@ -661,6 +664,7 @@ for arg in "$@"; do
 		--wifi-filter=*)      WIFI_FILTER="${arg#*=}" ;;
 		--mirror=*)           CUSTOM_MIRROR="${arg#*=}" ;;
 		--no-tproxy)          NO_TPROXY=1 ;;
+		--xray-from-release)  XRAY_SRC="release" ;;
 		--xray-from-upstream) XRAY_SRC="upstream" ;;
 		--xray-from-feed)     XRAY_SRC="feed" ;;
 		--no-apply)           DO_APPLY=0 ;;
