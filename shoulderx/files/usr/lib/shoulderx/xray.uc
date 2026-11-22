@@ -389,6 +389,8 @@ function build(opts) {
 		if (geo && autog != null) {
 			let pr = target_rule(target_for(autog));
 			pr.domain = [ site("RUSSIAN-BLOCK"), site("YOUTUBE") ];
+			for (let d in YT_DOMAINS)
+				push(pr.domain, d);
 			push(rules, pr);
 		}
 		push_direct();

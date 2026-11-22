@@ -30,8 +30,19 @@ save_dns() {
 	esac
 
 	# переключаем только если xray реально отвечает на DNS-порту, иначе
-	# LAN останется без резолвера совсем
-	if ! nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
+	# LAN останется без резолвера совсем. После рестарта xray это не сразу —
+	# даём до 10 секунд.
+	dns_ok=0
+	try=0
+	while [ "$try" -lt 10 ]; do
+		if nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
+			dns_ok=1
+			break
+		fi
+		try=$((try + 1))
+		sleep 1
+	done
+	if [ "$dns_ok" != "1" ]; then
 		echo "xray не отвечает на 127.0.0.1:$DNSPORT — dnsmasq не переключаю"
 		return 1
 	fi
@@ -246,9 +257,9 @@ table inet $TABLE {
 		iifname != "br-lan" return
 		ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255 } return
 		ip daddr @nodes return
-		# QUIC не проксируем: UDP через туннель часто отваливается, а браузер
-		# после блокировки QUIC сразу переходит на TCP
-		udp dport 443 drop
+		# QUIC не проксируем, но и не «вешаем»: reject заставляет браузер
+		# мгновенно перейти на TCP (с drop вкладка висит как «нет интернета»)
+		udp dport 443 reject
 		meta l4proto tcp tproxy to :$PORT meta mark set $FWMARK accept
 		meta l4proto udp tproxy to :$PORT meta mark set $FWMARK accept
 	}
