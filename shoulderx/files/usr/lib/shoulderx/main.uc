@@ -257,7 +257,7 @@ function settings() {
 		socks_port: int(g("socks_port", "20180")),
 		http_port: int(g("http_port", "0")),
 		api_port: int(g("api_port", "20190")),
-		tproxy_port: int(g("tproxy_port", "0")),
+		tproxy_port: int(g("tproxy_port", "12345")),
 		dns_port: int(g("dns_port", "5353")),
 		lte_filter: as_list(c.get("shoulderx", "settings", "lte_filter"), [ "LTE" ]),
 		wifi_filter: as_list(c.get("shoulderx", "settings", "wifi_filter"), [ "WiFi" ]),

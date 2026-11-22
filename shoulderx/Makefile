@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shoulderx
-PKG_VERSION:=0.5.1
+PKG_VERSION:=0.5.2
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -85,6 +85,7 @@ define Package/shoulderx/install
 	$(INSTALL_BIN)  ./files/usr/bin/shoulderx $(1)/usr/bin/shoulderx
 	$(INSTALL_BIN)  ./files/etc/init.d/shoulderx-xray $(1)/etc/init.d/shoulderx-xray
 	$(INSTALL_DATA) ./files/usr/lib/shoulderx/*.uc $(1)/usr/lib/shoulderx/
+	$(INSTALL_BIN)  ./files/usr/lib/shoulderx/tproxy.sh $(1)/usr/lib/shoulderx/tproxy.sh
 	$(INSTALL_DATA) ./files/usr/share/xray/geoip.dat $(1)/usr/share/xray/geoip.dat
 	$(INSTALL_DATA) ./files/usr/share/xray/geosite.dat $(1)/usr/share/xray/geosite.dat
 	echo "$(PKG_VERSION)-r$(PKG_RELEASE)" > $(1)/usr/lib/shoulderx/version

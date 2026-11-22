@@ -368,7 +368,15 @@ function build(opts) {
 	};
 
 	if (opts.mode == "lte") {
-		// обход БС: напрямую только белый список, остальное — в туннель
+		// обход БС: напрямую только белый список, остальное — в туннель.
+		// Заблокированное в РФ — явно в туннель ДО белого списка: домены
+		// вроде chatgpt.com живут на Cloudflare, чьи адреса есть в geoip:WHITELIST,
+		// и без этого правила уходили напрямую (403).
+		if (geo && autog != null) {
+			let pr = target_rule(target_for(autog));
+			pr.domain = [ site("RUSSIAN-BLOCK"), site("YOUTUBE") ];
+			push(rules, pr);
+		}
 		push_direct();
 		if (autog != null) {
 			let r = target_rule(target_for(autog));

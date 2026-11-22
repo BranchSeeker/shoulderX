@@ -28,7 +28,7 @@ config settings 'settings'
 	option api_port '20190'
 
 	# Порт прозрачного прокси для LAN (nft tproxy -> xray). 0 — выключено.
-	option tproxy_port '0'
+	option tproxy_port '12345'
 
 	# Маршрутизация по geo-файлам RoscomVPN: whitelist (РФ) -> напрямую,
 	# всё остальное -> в туннель. Сами файлы едут в пакете (/usr/share/xray).

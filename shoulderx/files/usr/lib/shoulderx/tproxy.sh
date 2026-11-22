@@ -24,7 +24,17 @@ nft_bin() { command -v nft >/dev/null 2>&1 && echo nft || echo ""; }
 # DNS у БС отдаёт NXDOMAIN на заблокированные домены и подсовывает IPv6.
 # На время работы переключаем dnsmasq на вход Xray (через туннель).
 save_dns() {
-	[ -f "$DNS_FILE" ] && return
+	# уже переключено — второй раз не трогаем
+	case "$(uci -q get dhcp.@dnsmasq[0].server)" in
+		*127.0.0.1#5353*) [ -f "$DNS_FILE" ] && return ;;
+	esac
+
+	# переключаем только если xray реально отвечает на DNS-порту, иначе
+	# LAN останется без резолвера совсем
+	if ! nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
+		echo "xray не отвечает на 127.0.0.1:$DNSPORT — dnsmasq не переключаю"
+		return 1
+	fi
 
 	nr=$(uci -q get dhcp.@dnsmasq[0].noresolv)
 	srv=$(uci -q get dhcp.@dnsmasq[0].server)
