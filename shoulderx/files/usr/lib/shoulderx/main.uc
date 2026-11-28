@@ -5,14 +5,11 @@
 //   list      — показать узлы из кэша или файла
 //   gen       — собрать конфиг Xray (--write чтобы записать)
 //   apply     — fetch + gen --write + restart (то, что зовёт LuCI и cron)
-//   status    — состояние: режим, секции, кэш, конфиг, xray
-//   lists     — обновить списки доменов (allow-domains) в кэш
+//   status    — состояние: секции, кэш, конфиг, xray
 //   schedule  — переустановить cron-задачу обновления (off — снять)
 //
-// Режимы:
-//   lte  — «обход БС»: узлы LTE-группы в один балансировщик, списки РКН напрямую;
-//   wifi — «домашний интернет»: секции yt и eu, их домены идут в балансировщики,
-//          всё остальное напрямую.
+// Режим один — «Обход БС»: узлы LTE-группы в один балансировщик, белый список
+// РФ напрямую, всё остальное в туннель.
 
 'use strict';
 
@@ -25,6 +22,9 @@ let xraymod = require("xray");
 const SUB_CACHE = "/etc/shoulderx/sub.json";
 const STATE = "/etc/shoulderx/state.json";
 const CRONTAB = "/etc/crontabs/root";
+// Режим один и не настраивается: «Обход БС». Константа остаётся в status/state,
+// чтобы LuCI и старые клиенты видели знакомое поле.
+const MODE = "lte";
 
 // Российские сервисы (russia_inside) в туннель не отправляем: они должны
 // открываться напрямую, через ноду только тратят трафик и ломаются.
@@ -200,6 +200,15 @@ function wait_ready(s, tags) {
 	}
 	return false;
 }
+// Включить прозрачный прокси. tproxy.sh ждёт ответа xray на DNS-порту и
+// возвращает ненулевой код, если dnsmasq переключить не удалось, — вызывающий
+// код может повторить попытку вместо «повторите apply руками».
+function tproxy_start(port, dns_port) {
+	let cmd = "SHOULDERX_TPROXY_PORT=" + port +
+		" SHOULDERX_DNS_PORT=" + dns_port +
+		" /usr/lib/shoulderx/tproxy.sh start >/dev/null 2>&1";
+	return system(cmd) == 0;
+}
 function balancer_selected(api_port, section) {
 	let text = fetchmod.cmd_out("/usr/bin/xray api bi -s 127.0.0.1:" + api_port + " " + section + " 2>&1");
 	return bi_tag(text, section);
@@ -255,14 +264,12 @@ function settings() {
 	return {
 		url: (length(urls) > 0) ? urls[0] : "",
 		urls: urls,
-		mode: g("mode", "lte"),
 		socks_port: int(g("socks_port", "20180")),
 		http_port: int(g("http_port", "0")),
 		api_port: int(g("api_port", "20190")),
 		tproxy_port: int(g("tproxy_port", "12345")),
 		dns_port: int(g("dns_port", "5353")),
 		lte_filter: as_list(c.get("shoulderx", "settings", "lte_filter"), [ "LTE" ]),
-		wifi_filter: as_list(c.get("shoulderx", "settings", "wifi_filter"), [ "WiFi" ]),
 		out: g("config_path", "/etc/xray/config.json"),
 		init: init_path(g("xray_init", "")),
 		ua: g("user_agent", "Happ/2.7.0"),
@@ -302,8 +309,6 @@ function parse_args(argv) {
 				a.url = [];
 			push(a.url, u);
 		}
-		else if (substr(v, 0, 7) == "--mode=")
-			a.mode = substr(v, 7);
 		else if (substr(v, 0, 8) == "--group=")
 			a.group = substr(v, 8);
 		else if (substr(v, 0, 7) == "--file=")
@@ -322,12 +327,6 @@ function parse_args(argv) {
 			a.safe = substr(v, 7);
 		else if (substr(v, 0, 13) == "--lte-filter=")
 			a.lte_filter = substr(v, 13);
-		else if (substr(v, 0, 14) == "--wifi-filter=")
-			a.wifi_filter = substr(v, 14);
-		else if (substr(v, 0, 13) == "--yt-exclude=")
-			a.yt_exclude = substr(v, 13);
-		else if (substr(v, 0, 13) == "--eu-exclude=")
-			a.eu_exclude = substr(v, 13);
 		else if (v == "--check")
 			a.check = true;
 		else if (v == "--force")
@@ -447,14 +446,12 @@ function cmd_list(a) {
 		out("ошибка разбора: " + parsed.error);
 		return 1;
 	}
-	let mode = a.mode || settings().mode;
 	let s0 = settings();
 	let fopts = {
-		lte_filter: (a.lte_filter != null) ? csv(a.lte_filter) : s0.lte_filter,
-		wifi_filter: (a.wifi_filter != null) ? csv(a.wifi_filter) : s0.wifi_filter
+		lte_filter: (a.lte_filter != null) ? csv(a.lte_filter) : s0.lte_filter
 	};
-	let groups = xraymod.split_groups(parsed.nodes, mode, fopts);
-	out("всего узлов: " + length(parsed.nodes) + ", режим " + mode);
+	let groups = xraymod.split_groups(parsed.nodes, fopts);
+	out("всего узлов: " + length(parsed.nodes));
 	for (let g in groups) {
 		out("  секция " + g.tag + ": " + length(g.nodes));
 		print_nodes(g.nodes);
@@ -543,7 +540,7 @@ function node_details(cfg) {
 	}
 	return res;
 }
-function save_state(mode, built, diff) {
+function save_state(built, diff) {
 	// Имена серверов из подписки в конфиг не попадают (там только теги),
 	// поэтому кладём их рядом — из них собираются плитки в LuCI.
 	let name_by_tag = {};
@@ -556,7 +553,7 @@ function save_state(mode, built, diff) {
 
 	let st = {
 		updated: time(),
-		mode: mode,
+		mode: MODE,
 		nodes: length(built.nodes),
 		sections: built.sections,
 		added: diff.added,
@@ -659,7 +656,6 @@ function cmd_geo(a) {
 function cmd_gen(a) {
 	uci_commit_pending();
 	let s = settings();
-	let mode = a.mode || s.mode;
 
 	let src = load_text(a);
 	if (src.text == null) {
@@ -679,12 +675,11 @@ function cmd_gen(a) {
 
 	let s0 = settings();
 	let fopts = {
-		lte_filter: (a.lte_filter != null) ? csv(a.lte_filter) : s0.lte_filter,
-		wifi_filter: (a.wifi_filter != null) ? csv(a.wifi_filter) : s0.wifi_filter
+		lte_filter: (a.lte_filter != null) ? csv(a.lte_filter) : s0.lte_filter
 	};
-	let groups = xraymod.split_groups(parsed.nodes, mode, fopts);
+	let groups = xraymod.split_groups(parsed.nodes, fopts);
 	if (length(groups) == 0) {
-		out("в режиме " + mode + " нет узлов (всего в подписке: " + length(parsed.nodes) + ")");
+		out("нет узлов (всего в подписке: " + length(parsed.nodes) + ")");
 		return 1;
 	}
 
@@ -698,7 +693,6 @@ function cmd_gen(a) {
 	let port = a.socks_port || s.socks_port;
 	let built = xraymod.build({
 		groups: groups,
-		mode: mode,
 		geo: geo_on,
 		socks_port: port,
 		http_port: (a.http_port != null) ? a.http_port : s.http_port,
@@ -719,9 +713,9 @@ function cmd_gen(a) {
 	}
 
 	if (!a.write) {
-		out("режим: " + mode + ", socks 127.0.0.1:" + port);
+		out("socks 127.0.0.1:" + port);
 		for (let sec in built.sections)
-			out("  секция " + sec.tag + ": узлов " + sec.nodes + ", доменов " + sec.domains);
+			out("  секция " + sec.tag + ": узлов " + sec.nodes);
 		print_nodes(built.nodes);
 		if (length(diff.added) > 0)
 			out("новые: " + join(",", diff.added));
@@ -748,12 +742,12 @@ function cmd_gen(a) {
 	}
 
 	system("mv -f '" + tmp + "' '" + target + "'");
-	save_state(mode, built, diff);
+	save_state(built, diff);
 
 	if (!a.quiet) {
 		out("конфиг записан: " + target);
 		for (let sec in built.sections)
-			out("  секция " + sec.tag + ": узлов " + sec.nodes + ", доменов " + sec.domains);
+			out("  секция " + sec.tag + ": узлов " + sec.nodes);
 		out("новых: " + length(diff.added) + ", убрано: " + length(diff.removed));
 		for (let w in warnings)
 			out("внимание: " + w);
@@ -763,9 +757,10 @@ function cmd_gen(a) {
 		// Сначала снимаем tproxy: он держит DNS клиентов на xray (dnsmasq ->
 		// 127.0.0.1:5353). Если оставить, observatory не сможет отрезолвить
 		// probeUrl (DNS крутится через тот же xray) и балансировщик не выберет
-		// узел — LAN останется без интернета.
+		// узел — LAN останется без интернета. pause снимает правила, но помнит,
+		// что прокси должен быть включён: его вернёт старт ниже или watchdog.
 		if (a.write)
-			system("/usr/lib/shoulderx/tproxy.sh stop >/dev/null 2>&1");
+			system("/usr/lib/shoulderx/tproxy.sh pause >/dev/null 2>&1");
 
 		// пакет xray-core не стартует без xray.enabled.enabled=1
 		xray_ensure_enabled();
@@ -780,10 +775,8 @@ function cmd_gen(a) {
 	if (a.write) {
 		if (tport > 0) {
 			// ждём, пока балансировщик выберет живой узел: включать tproxy
-			// раньше — значит отдать LAN в пустоту
-			// ждём ВСЕ балансировщики: если включить tproxy, пока eu ещё не
-			// выбрал узел, его трафик уйдёт в fallbackTag (direct) — «интернет
-			// пропал»
+			// раньше — значит отдать DNS в fallbackTag (direct), а провайдер
+			// отдаёт на заблокированное NXDOMAIN — «не заводится».
 			let tags = [];
 			for (let g in built.sections) {
 				if (g.nodes > 1)
@@ -807,13 +800,22 @@ function cmd_gen(a) {
 					system("sleep 1");
 				}
 			}
-			if (!ready) {
-				system("/usr/lib/shoulderx/tproxy.sh stop >/dev/null 2>&1");
-				out("внимание: балансировщики ещё не выбрали узлы — прозрачный прокси не включён, LAN идёт напрямую (повторите apply через минуту)");
-			} else {
-				system("SHOULDERX_TPROXY_PORT=" + tport + " SHOULDERX_DNS_PORT=" + s.dns_port + " /usr/lib/shoulderx/tproxy.sh start >/dev/null 2>&1");
-				if (!a.quiet)
-					out("прозрачный прокси LAN: 127.0.0.1:" + tport);
+			// tproxy.sh start сам ждёт ответа xray на DNS-порту (до 30 с) и
+			// возвращает ошибку, если dnsmasq переключить не удалось. На первом
+			// запуске балансировщику нужно время — повторяем попытку, вместо
+			// «повторите apply вручную».
+			let started = tproxy_start(tport, s.dns_port);
+			if (!started && ready) {
+				system("sleep 5");
+				started = tproxy_start(tport, s.dns_port);
+			}
+			if (!started) {
+				// правила снимаем, чтобы LAN не ушёл в мёртвый tproxy, но флаг
+				// включения оставляем: watchdog поднимет прокси, когда xray оживёт
+				system("/usr/lib/shoulderx/tproxy.sh pause >/dev/null 2>&1");
+				out("внимание: xray ещё не отвечает на DNS-порту — правила сняты, watchdog включит прокси, когда туннель поднимется");
+			} else if (!a.quiet) {
+				out("прозрачный прокси LAN: 127.0.0.1:" + tport);
 			}
 		} else {
 			system("/usr/lib/shoulderx/tproxy.sh stop >/dev/null 2>&1");
@@ -858,16 +860,8 @@ function uci_store_args(a) {
 		c.set("shoulderx", "settings", "subscription_url", a.url);
 		changed = true;
 	}
-	if (a.mode != null && a.mode != "") {
-		c.set("shoulderx", "settings", "mode", a.mode);
-		changed = true;
-	}
 	if (a.lte_filter != null) {
 		c.set("shoulderx", "settings", "lte_filter", csv(a.lte_filter));
-		changed = true;
-	}
-	if (a.wifi_filter != null) {
-		c.set("shoulderx", "settings", "wifi_filter", csv(a.wifi_filter));
 		changed = true;
 	}
 
@@ -878,11 +872,7 @@ function cmd_apply(a) {
 	// --async: запускаем себя в фоне и сразу отвечаем — LuCI не ждёт таймаут
 	if (a.async === true && a.worker !== true) {
 		let parts = [ "apply", "--worker", "--quiet" ];
-		if (a.mode != null) push(parts, "--mode=" + a.mode);
 		if (a.lte_filter != null) push(parts, "--lte-filter=" + a.lte_filter);
-		if (a.wifi_filter != null) push(parts, "--wifi-filter=" + a.wifi_filter);
-		if (a.yt_exclude != null) push(parts, "--yt-exclude=" + a.yt_exclude);
-		if (a.eu_exclude != null) push(parts, "--eu-exclude=" + a.eu_exclude);
 		if (type(a.url) == "array") {
 			for (let u in a.url)
 				push(parts, "--url=" + u);
@@ -905,10 +895,8 @@ function cmd_apply(a) {
 
 	// в журнал — с чем именно пришли: помогает понять, что прислала LuCI
 	let dbg = [];
-	if (a.mode != null) push(dbg, "--mode=" + a.mode);
 	if (a.lte_filter != null) push(dbg, "--lte=" + a.lte_filter);
-	if (a.wifi_filter != null) push(dbg, "--wifi=" + a.wifi_filter);
-	system("logger -t shoulderx 'apply " + join(" ", dbg) + " (uci mode=" + s.mode + " lte=" + join(",", s.lte_filter) + " wifi=" + join(",", s.wifi_filter) + ")'");
+	system("logger -t shoulderx 'apply " + join(" ", dbg) + " (lte=" + join(",", s.lte_filter) + ")'");
 
 	let urls = (type(a.url) == "array" && length(a.url) > 0) ? a.url : s.urls;
 	if (length(urls) > 0) {
@@ -944,7 +932,7 @@ function cmd_apply(a) {
 		if (!a.quiet)
 			out("geo нет или устарели — поднимаю туннель, чтобы их скачать");
 		cmd_gen(boot);
-		wait_ready(s, [ "auto", "yt", "eu" ]);
+		wait_ready(s, [ "auto" ]);
 
 		if (a.worker === true)
 			job_phase("geo");
@@ -978,19 +966,6 @@ function read_state() {
 	if (t == null)
 		return null;
 	return json(t);
-}
-// Быстрое переключение режима из консоли: shoulderx mode lte|wifi
-function cmd_mode(a) {
-	let want = (ARGV[1] != null) ? ARGV[1] : "";
-	if (want != "lte" && want != "wifi") {
-		out("usage: shoulderx mode lte|wifi");
-		return 2;
-	}
-	let aa = {};
-	for (let k in a)
-		aa[k] = a[k];
-	aa.mode = want;
-	return cmd_apply(aa);
 }
 
 // ── автообновление самого shoulderX ────────────────────────────────────────
@@ -1151,7 +1126,7 @@ function cmd_status(a) {
 	let s = settings();
 	let state = read_state();
 	let st = {
-		mode: s.mode,
+		mode: MODE,
 		socks_port: s.socks_port,
 		http_port: s.http_port,
 		config: s.out,
@@ -1184,12 +1159,12 @@ function cmd_status(a) {
 		return 0;
 	}
 
-	out("режим: " + st.mode + ", socks 127.0.0.1:" + st.socks_port +
+	out("socks 127.0.0.1:" + st.socks_port +
 		((st.http_port > 0) ? (", http 127.0.0.1:" + st.http_port) : ""));
 	if (length(st.sections) > 0) {
 		let parts = [];
 		for (let sec in st.sections)
-			push(parts, sec.tag + ": " + sec.nodes + " узлов/" + sec.domains + " доменов");
+			push(parts, sec.tag + ": " + sec.nodes + " узлов");
 		out("секции: " + join("; ", parts));
 	}
 	out("подписка: " + ((st.cache_bytes >= 0) ? ("кэш " + st.cache_bytes + " байт") : "не скачана"));
@@ -1415,7 +1390,7 @@ function cmd_check(a) {
 	}
 
 	if (a.json) {
-		print(sprintf("%J", { ts: time(), mode: s.mode, rows: rows, failed: failed }) + "\n");
+		print(sprintf("%J", { ts: time(), mode: MODE, rows: rows, failed: failed }) + "\n");
 		return (failed > 0) ? 1 : 0;
 	}
 
@@ -1615,8 +1590,6 @@ if (cmd == "fetch") {
 	exit(cmd_geo(a));
 } else if (cmd == "selfupdate") {
 	exit(cmd_selfupdate(a));
-} else if (cmd == "mode") {
-	exit(cmd_mode(a));
 } else if (cmd == "job") {
 	exit(cmd_job(a));
 } else if (cmd == "status") {
@@ -1625,7 +1598,7 @@ if (cmd == "fetch") {
 	exit(cmd_schedule(ARGV[1] == "off"));
 } else {
 	print("usage: shoulderx <fetch|list|gen|apply|check|nodes|state|autostart|service|tproxy|geo|status|schedule>\n" +
-	      "       [--url=..] [--file=..] [--mode=lte|wifi] [--group=proxy|ru|all]\n" +
+	      "       [--url=..] [--file=..] [--group=proxy|ru|all]\n" +
 	      "       [--socks-port=20180] [--http-port=0] [--api-port=20190] [--tproxy-port=12345]\n" +
 	      "       [--no-geo] [--out=FILE] [--write] [--restart] [--json] [--quiet]\n" +
 	      "       [--safe=SEC] [--direct]\n" +

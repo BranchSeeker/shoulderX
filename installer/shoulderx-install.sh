@@ -10,10 +10,10 @@
 #      архив из релиза shoulderX -> upstream XTLS -> фид (любая версия).
 #      Принудительно: --xray-from-release / --xray-from-upstream / --xray-from-feed;
 #   3) ставит пакеты shoulderx и luci-app-shoulderx из последнего релиза;
-#   4) настраивает подписку/режим и собирает конфиг (apply):
+#   4) настраивает подписку и собирает конфиг (apply):
 #      подписка напрямую -> geo через туннель -> полный туннель + tproxy.
 #
-# Флаги: --url=, --mode=lte|wifi, --lte-filter=, --wifi-filter=, --no-tproxy,
+# Флаги: --url=, --lte-filter=, --no-tproxy,
 #        --xray-from-upstream, --xray-from-feed, --no-apply, --uninstall,
 #        --purge, --dry-run, -y
 
@@ -34,9 +34,7 @@ XRAY_UPSTREAM="https://github.com/XTLS/Xray-core/releases/download/${XRAY_TAG}"
 
 # --- параметры --------------------------------------------------------------
 SUB_URL=""
-MODE=""
 LTE_FILTER=""
-WIFI_FILTER=""
 NO_TPROXY=0
 XRAY_SRC="auto"          # auto | release | upstream | feed
 DO_APPLY=1
@@ -550,14 +548,15 @@ configure() {
 	step "Настройки"
 
 	if [ "$DRY" = "1" ]; then
-		ok "(dry-run) url=${SUB_URL:-<не задан>} mode=${MODE:-из пакета}"
+		ok "(dry-run) url=${SUB_URL:-<не задан>} режим=обход БС"
 		return 0
 	fi
 
 	[ -n "$SUB_URL" ]      && uci -q set "shoulderx.settings.subscription_url=$SUB_URL"
-	[ -n "$MODE" ]         && uci -q set "shoulderx.settings.mode=$MODE"
 	[ -n "$LTE_FILTER" ]   && uci -q set "shoulderx.settings.lte_filter=$LTE_FILTER"
-	[ -n "$WIFI_FILTER" ]  && uci -q set "shoulderx.settings.wifi_filter=$WIFI_FILTER"
+	# опций mode и wifi_filter больше нет: режим один
+	uci -q delete shoulderx.settings.mode
+	uci -q delete shoulderx.settings.wifi_filter
 	[ "$NO_TPROXY" = "1" ] && uci -q set "shoulderx.settings.tproxy_port=0"
 	[ -n "$XRAY_INIT" ]    && uci -q set "shoulderx.settings.xray_init=$XRAY_INIT"
 	uci -q set shoulderx.settings.geo='1'
@@ -566,7 +565,7 @@ configure() {
 	/etc/init.d/shoulderx enable >/dev/null 2>&1 || true
 	# расписание: подписка каждые 6 ч + самообновление раз в сутки
 	/usr/bin/shoulderx schedule >/dev/null 2>&1 || true
-	ok "режим: $(uci -q get shoulderx.settings.mode)"
+	ok "режим: обход БС"
 	if [ -z "$(uci -q get shoulderx.settings.subscription_url)" ]; then
 		warn "ссылка подписки не задана — добавьте в LuCI"
 	fi
@@ -603,7 +602,6 @@ summary() {
 	info "LuCI:   http://${ip:-192.168.1.1}/cgi-bin/luci/admin/services/shoulderx"
 	info "статус: shoulderx status"
 	info "тест:   shoulderx check"
-	info "режимы: shoulderx mode lte | wifi"
 	info "стоп:   shoulderx tproxy stop"
 }
 
@@ -640,9 +638,7 @@ shoulderX installer
   usage: shoulderx-install.sh [флаги]
 
   --url=URL             ссылка подписки
-  --mode=lte|wifi       режим (по умолчанию — из пакета: lte)
   --lte-filter=X        фильтр групп для «обхода БС» (по умолчанию LTE)
-  --wifi-filter=X       фильтр групп для «домашнего интернета» (WiFi)
   --mirror=URL          своё зеркало GitHub (префикс, напр. https://gh-proxy.com/)
   --no-tproxy           не включать прозрачный прокси для LAN
   --xray-from-release   ставить Xray только из релиза shoulderX (без фида)
@@ -661,9 +657,7 @@ trap cleanup_tmp EXIT
 for arg in "$@"; do
 	case "$arg" in
 		--url=*)              SUB_URL="${arg#*=}" ;;
-		--mode=*)             MODE="${arg#*=}" ;;
 		--lte-filter=*)       LTE_FILTER="${arg#*=}" ;;
-		--wifi-filter=*)      WIFI_FILTER="${arg#*=}" ;;
 		--mirror=*)           CUSTOM_MIRROR="${arg#*=}" ;;
 		--no-tproxy)          NO_TPROXY=1 ;;
 		--xray-from-release)  XRAY_SRC="release" ;;

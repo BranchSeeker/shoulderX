@@ -11,9 +11,8 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 
 Установщик делает шаги 0–3 сам: проверяет платформу, ставит Xray (бинарник из
 релиза под архитектуру), ставит пакеты, настраивает подписку и собирает конфиг.
-Флаги: `--url=`, `--mode=lte|wifi`, `--lte-filter=`, `--wifi-filter=`,
-`--no-tproxy`, `--xray-from-upstream`, `--xray-from-feed`, `--mirror=`,
-`--dry-run`, `--uninstall [--purge]`.
+Флаги: `--url=`, `--lte-filter=`, `--no-tproxy`, `--xray-from-upstream`,
+`--xray-from-feed`, `--mirror=`, `--dry-run`, `--uninstall [--purge]`.
 
 Если GitHub недоступен, установщик перебирает прокси-зеркала сам
 (`gh-proxy.com`, `ghfast.top`, `ghproxy.net`), а сам скрипт берётся через
@@ -108,7 +107,7 @@ nft-правила + policy routing, DNS-запросы клиентов ухо�
 ```sh
 shoulderx check        # тест сервисов: туннель и напрямую
 shoulderx nodes        # узлы и выбранный балансировщиком
-shoulderx status       # режим, секции, что изменилось
+shoulderx status       # секции, что изменилось
 shoulderx tproxy status
 ```
 

@@ -12,6 +12,15 @@ start() {
 		/usr/bin/shoulderx gen --write --quiet >/dev/null 2>&1
 	/usr/bin/shoulderx schedule >/dev/null 2>&1
 	install_watchdog
+	resume_tproxy
+}
+
+# nft-правила не переживают перезагрузку. Если прозрачный прокси был включён,
+# возвращаем их сразу после старта xray (cron-сторож сделал бы это в течение
+# минуты, здесь — через 20 секунд после boot).
+resume_tproxy() {
+	[ -f /etc/shoulderx/tproxy.on ] || return 0
+	( sleep 20; /usr/lib/shoulderx/tproxy.sh watch >/dev/null 2>&1 ) &
 }
 
 # Страховка от «нет интернета»: если xray умер, а правила nft остались,

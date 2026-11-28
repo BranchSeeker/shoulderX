@@ -12,7 +12,7 @@
 
 shoulderkop раскладывает узлы по секциям podkop (sing-box). shoulderX делает
 другое: собирает полноценный клиентский конфиг Xray (`/etc/xray/config.json`)
-из той же подписки — с балансировщиками, секциями и маршрутизацией. В комплекте
+из той же подписки — с балансировщиком, секцией и маршрутизацией. В комплекте
 `luci-app-shoulderx`: одна страница в LuCI, как у shoulderkop.
 
 ## Зачем
@@ -29,45 +29,34 @@ shoulderkop раскладывает узлы по секциям podkop (sing-b
 поэтому такие ноды для него бесполезны. shoulderX держит туннель на Xray, а
 podkop (если нужен) просто ходит в его socks-порт.
 
-## Режимы и секции
+## Режим и маршрут
 
-| Режим | По умолчанию | В туннель | Напрямую |
-|---|---|---|---|
-| **Обход БС** (`lte`) | всё в туннель | всё, кроме белого списка | `whitelist` + `private` (домены и IP) |
-| **Домашний интернет** (`wifi`) | всё напрямую | YouTube и `russian-block` | всё остальное |
-
-Правила ровно такие:
+Режим один — **«Обход БС»**: всё в туннель, напрямую только белый список РФ.
 
 ```
-lte:   whitelist -> direct,   default -> proxy (балансировщик auto)
-wifi:  default -> direct,     youtube -> yt (proxy),   russian-block -> eu (proxy)
+whitelist + private -> direct      (домены и IP)
+russian-block, youtube -> proxy    (до whitelist: живут на Cloudflare)
+всё остальное -> proxy (балансировщик auto)
 ```
 
-Секции в WiFi-режиме:
-
-* `yt` — балансировщик для YouTube (`geosite:YOUTUBE`, `geoip:YOUTUBE`);
-* `eu` — балансировщик для заблокированного в РФ (`geosite:RUSSIAN-BLOCK`,
-  `geoip:RUSSIAN-BLOCK`).
-
-Российские узлы в `eu` не попадают: зарубежные сервисы такие адреса блокируют,
-а РФ-сайты и так идут напрямую. Узел считается российским, если в имени группы
-есть «Россия»/«Russia»/🇷🇺 (фильтры групп настраиваются в LuCI).
+Секция одна — `auto`: узлы из групп, подходящих под фильтр `lte_filter`
+(по умолчанию «LTE»), в один балансировщик `leastPing`. Совпадений нет —
+берутся все узлы подписки.
 
 ## Балансировщики
 
-Как в podkop, только средствами Xray: на каждую секцию — свой `balancer` со
-стратегией `leastPing` плюс `observatory`, который раз в минуту проверяет все
-узлы секции через `https://www.gstatic.com/generate_204`.
+Как в podkop, только средствами Xray: на секцию — свой `balancer` со стратегией
+`leastPing` плюс `observatory`, который раз в минуту проверяет все узлы секции
+через `https://www.gstatic.com/generate_204`.
 
 ```json
 "balancers": [
-  { "tag": "yt", "selector": [ "yt" ], "strategy": { "type": "leastPing" }, "fallbackTag": "yt-1" },
-  { "tag": "eu", "selector": [ "eu" ], "strategy": { "type": "leastPing" }, "fallbackTag": "eu-1" }
+  { "tag": "auto", "selector": [ "auto" ], "strategy": { "type": "leastPing" }, "fallbackTag": "direct" }
 ]
 ```
 
 Селектор матчит outbound'ы по префиксу тега, поэтому узлы секции называются
-`yt-1`, `yt-2`, `eu-1`, … Если в секции один узел, балансировщик не создаётся —
+`auto-1`, `auto-2`, … Если в секции один узел, балансировщик не создаётся —
 правило указывает прямо на outbound (иначе Xray не находит balancer и не
 стартует).
 
@@ -101,9 +90,9 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 4. собирает конфиг: подписка напрямую → geo через туннель → туннель + tproxy.
 
 ```sh
-# с подпиской и режимом сразу
+# с подпиской сразу
 wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/shoulderx-install.sh \
-  | sh -s -- --url='https://sub.example.com/TOKEN' --mode=lte
+  | sh -s -- --url='https://sub.example.com/TOKEN'
 ```
 
 ### Откуда берётся Xray
@@ -125,7 +114,7 @@ wget -qO- https://github.com/BranchSeeker/shoulderX/releases/latest/download/sho
 `ghproxy.net`) для пакетов и Xray. Сам скрипт можно взять через jsDelivr:
 
 ```sh
-wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.6.1/installer/shoulderx-install.sh | sh
+wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.7.0/installer/shoulderx-install.sh | sh
 ```
 
 Своё зеркало (префикс к адресам GitHub):
@@ -136,7 +125,7 @@ wget -qO- https://cdn.jsdelivr.net/gh/BranchSeeker/shoulderX@v0.6.1/installer/sh
 SHOULDERX_MIRROR=https://gh-proxy.com/ sh shoulderx-install.sh
 ```
 
-Флаги: `--mode=lte|wifi`, `--lte-filter=`, `--wifi-filter=`, `--no-tproxy`,
+Флаги: `--lte-filter=`, `--no-tproxy`,
 `--xray-from-upstream`, `--xray-from-feed`, `--no-apply`, `--dry-run`,
 `--uninstall [--purge]`.
 
@@ -159,24 +148,23 @@ shoulderx list                       # что нашли, по секциям
 shoulderx gen                        # собрать конфиг и показать сводку
 shoulderx gen --write --restart      # записать и перезапустить xray
 shoulderx apply                      # fetch + gen + write + restart
-shoulderx lists                      # обновить списки доменов
 shoulderx check                      # проверить сервисы (туннель + напрямую)
 shoulderx nodes                      # плитки серверов из конфига: пинг + выбранный
-shoulderx status                     # режим, секции, что добавлено/убрано
+shoulderx status                     # секции, что добавлено/убрано, xray
 ```
 
 Флаги `gen`:
 
 ```
---mode=lte|wifi         какие секции собирать (по умолчанию из uci)
 --socks-port=20180      порт socks-инбаунда
 --http-port=0           порт HTTP-прокси (0 — не поднимать)
---domains=FILE          список доменов РКН (по умолчанию geosite.txt)
---ips=FILE              список подсетей РКН (по умолчанию geoip.txt)
---no-lists              не добавлять правила из списков
---refresh-lists         перекачать списки сообщества
+--api-port=20190        порт локального API Xray (0 — не поднимать)
+--tproxy-port=12345     порт прозрачного прокси (0 — выключить)
+--lte-filter=           фильтр групп узлов (по умолчанию из uci)
+--no-geo                собрать без geo-файлов (встроенный список YouTube)
 --out=FILE              куда писать (по умолчанию /etc/xray/config.json)
 --write                 записать (без флага только сводка)
+--restart               перезапустить xray
 --json                  напечатать готовый конфиг в stdout
 ```
 
@@ -211,13 +199,10 @@ $ shoulderx check --group=ru
 `shoulderx nodes` показывает узлы, которые сейчас лежат в конфиге, по секциям:
 
 ```
-секция yt (2):
-  [*] yt-1     ru01.example.net:443      tcp+reality      47мс
-  [ ] yt-2     ru02.example.net:443      grpc+reality     98мс
-секция eu (19):
-  [ ] eu-1     203.0.113.10:443          grpc+reality     44мс
-  ...
-  [*] eu-19    203.0.113.25:443          tcp+reality      60мс
+секция auto (3):
+  [*] auto-1   ru01.example.net:443      tcp+reality      47мс
+  [ ] auto-2   ru02.example.net:443      grpc+reality     98мс
+  [ ] auto-3   203.0.113.10:443          grpc+reality     44мс
 ```
 
 * `[*]` — узел, который балансировщик выбрал **прямо сейчас**. Данные берутся из
@@ -230,9 +215,9 @@ $ shoulderx check --group=ru
 
 ## LuCI
 
-**Сервисы → ShoulderX**: ссылка подписки, HWID, режим, списки секций `yt`/`eu`,
-порты, расписание обновления, кнопки «Обновить подписку», «Обновить списки»,
-«Пересобрать конфиг» и блок статуса (режим, секции, добавленные/убранные узлы).
+**Сервисы → ShoulderX**: ссылка подписки, HWID, фильтр групп узлов, порты,
+расписание обновления, кнопки «Обновить подписку» и «Пересобрать», блок
+статуса (секции, добавленные/убранные узлы, Xray).
 
 ## Если подписка не скачивается
 
@@ -260,15 +245,15 @@ $ shoulderx check --group=ru
 
 Категории, которые использует shoulderX:
 
-| категория | где | куда |
-|---|---|---|
-| `WHITELIST`, `PRIVATE` (geosite + geoip) | оба режима | direct |
-| `YOUTUBE` (geosite + geoip) | wifi | секция `yt` |
-| `RUSSIAN-BLOCK` (geosite + geoip) | wifi | секция `eu` |
-| всё остальное | lte | секция `auto` |
+| категория | куда |
+|---|---|
+| `WHITELIST`, `PRIVATE` (geosite + geoip) | direct |
+| `RUSSIAN-BLOCK`, `YOUTUBE` (geosite + geoip) | секция `auto` (proxy) |
+| всё остальное | секция `auto` (proxy) |
 
-Порядок правил: сначала `yt`, потом белый список, потом `russian-block` —
-поэтому домен, попавший и в YouTube, и в общий список, уйдёт в `yt`.
+Порядок правил: `russian-block`/`youtube` → белый список → default proxy.
+Заблокированное в РФ уходит в туннель, даже если его адреса есть в whitelist
+(иначе ChatGPT на Cloudflare отдаёт 403).
 
 Файлы `geoip.dat` (~460 КБ) и `geosite.dat` (~2.4 МБ) **едут в пакете** —
 `/usr/share/xray/`, поэтому сборка конфига работает офлайн. Обновить списки:
@@ -299,30 +284,23 @@ uci commit podkop && /etc/init.d/podkop restart
 Виртуальный OpenWrt 25.12.6 (x86_64), xray-core 26.10.21, реальная подписка:
 
 ```
-# обход БС
-shoulderx gen --mode=lte --http-port=20181 --write
+shoulderx gen --http-port=20181 --write
   секция auto: узлов 1
 xray run -test -c /etc/xray/config.json        → Configuration OK
 http_proxy=http://127.0.0.1:20181 wget -qO- http://ip-api.com/line/?fields=query
   → 198.51.100.7                              (выход ноды node.example.net:8443)
-
-# домашний интернет
-shoulderx gen --mode=wifi --write
-  секция yt: узлов 2, доменов 18
-  секция eu: узлов 2, доменов 1479
-  → xray run -test: Configuration OK, balancers yt/eu на месте
 ```
 
 ## Состояние
 
 - [x] разбор подписки (Xray JSON), отсев заглушек, дубликатов и битых REALITY-узлов
-- [x] режимы `lte` / `wifi`, секции `yt` и `eu`
-- [x] балансировщики `leastPing` + `observatory` на каждую секцию
+- [x] один режим «Обход БС», секция `auto`
+- [x] балансировщик `leastPing` + `observatory`
 - [x] маршрут на geo-файлах fast4g.ru, вкомплектованных в пакет
 - [x] синхронизация: добавленные/удалённые узлы, отчёт в статусе
 - [x] валидация `xray run -test` перед записью
 - [x] LuCI: страница, меню, ACL
-- [ ] tproxy-инбаунд (автономный режим без podkop)
+- [x] tproxy для LAN (без podkop), восстановление правил после перезагрузки
 - [ ] предварительная проба узлов перед записью (чтобы в конфиг не попадали мёртвые)
 - [ ] сборка пакетов в CI и релизы
 
@@ -332,6 +310,6 @@ shoulderx gen --mode=wifi --write
 |---|---|---|
 | движок | sing-box (podkop) | Xray |
 | результат | секции `skop_*` в uci | `/etc/xray/config.json` |
-| режимы | lte / wifi | lte / wifi (секции yt, eu) |
-| списки | качает сам | РКН — от shoulderkop, сообщество — сам |
+| режимы | только «домашний интернет» | только «обход БС» |
+| списки | качает сам | geo-файлы fast4g.ru в пакете |
 | зачем | «плечо» для podkop | обход ограничений sing-box на REALITY |

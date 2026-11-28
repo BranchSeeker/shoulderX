@@ -18,6 +18,9 @@ SAFE_FILE="/tmp/.shoulderx.tproxy.safe"
 FLOW_FILE="/tmp/.shoulderx.flow_offload"
 DNS_FILE="/tmp/.shoulderx.dnsmasq"
 V6_FILE="/tmp/.shoulderx.ipv6"
+# «Прокси должен быть включён»: файл переживает перезагрузку, по нему сторож
+# (watch) возвращает правила nft, которые после ребута исчезают.
+ENABLED_FILE="/etc/shoulderx/tproxy.on"
 
 nft_bin() { command -v nft >/dev/null 2>&1 && echo nft || echo ""; }
 
@@ -26,15 +29,15 @@ nft_bin() { command -v nft >/dev/null 2>&1 && echo nft || echo ""; }
 save_dns() {
 	# уже переключено — второй раз не трогаем
 	case "$(uci -q get dhcp.@dnsmasq[0].server)" in
-		*127.0.0.1#5353*) [ -f "$DNS_FILE" ] && return ;;
+		*127.0.0.1#"$DNSPORT"*) [ -f "$DNS_FILE" ] && return 0 ;;
 	esac
 
-	# переключаем только если xray реально отвечает на DNS-порту, иначе
-	# LAN останется без резолвера совсем. После рестарта xray это не сразу —
-	# даём до 10 секунд.
+	# Переключаем только если xray реально отвечает на DNS-порту, иначе LAN
+	# останется без резолвера совсем. После рестарта xray это не сразу, а на
+	# первом запуске балансировщику нужно выбрать узел — ждём до 30 секунд.
 	dns_ok=0
 	try=0
-	while [ "$try" -lt 10 ]; do
+	while [ "$try" -lt 30 ]; do
 		if nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
 			dns_ok=1
 			break
@@ -54,11 +57,12 @@ save_dns() {
 
 	uci set dhcp.@dnsmasq[0].noresolv='1'
 	uci -q delete dhcp.@dnsmasq[0].server
-	uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+	uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#$DNSPORT"
 	# LAN без IPv6: AAAA-ответы только мешают (клиент идёт в мёртвый IPv6)
 	uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1
+	return 0
 }
 
 restore_dns() {
@@ -225,13 +229,12 @@ start() {
 	# без этого установленные соединения идут мимо netfilter и tproxy их не видит
 	save_flow_offload
 
-	# dnsmasq переключаем только если xray реально отвечает на DNS-порт:
-	# иначе роутер останется без DNS вообще
-	if nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
-		save_dns
-	else
-		echo "xray не отвечает на 127.0.0.1:$DNSPORT — dnsmasq не переключаю" >&2
-	fi
+	# dnsmasq переключаем только после того, как xray реально ответил на DNS-порту:
+	# save_dns ждёт до 30 с (первый запуск, рестарт xray) и сообщает об ошибке.
+	# Правила nft при этом всё равно ставим — туннель работает и без смены DNS,
+	# а сторож вернёт переключение позже.
+	dns_rc=0
+	save_dns || dns_rc=1
 	save_ipv6
 
 	# policy routing: помеченные пакеты должны обрабатываться локально
@@ -278,6 +281,10 @@ EOF
 		nft add element inet "$TABLE" nodes "{ $ips }" 2>/dev/null
 	fi
 
+	# «включён» — на диск: после перезагрузки nft-правил нет, и watch вернёт их
+	mkdir -p /etc/shoulderx 2>/dev/null
+	printf '%s %s\n' "$PORT" "$DNSPORT" > "$ENABLED_FILE"
+
 	if [ -n "$safe" ] && [ "$safe" != "0" ]; then
 		# откат делает сторож из cron (watch): фоновый sleep умирает вместе
 		# с ssh-сессией, а cron переживает всё
@@ -286,7 +293,7 @@ EOF
 	else
 		echo "включено: LAN -> xray 127.0.0.1:$PORT"
 	fi
-	return 0
+	return "$dns_rc"
 }
 
 confirm() {
@@ -312,7 +319,30 @@ status() {
 # иначе LAN остаётся без интернета совсем. Тут же срабатывает авто-откат
 # после `start --safe=N`.
 watch() {
-	if [ -z "$(nft_bin)" ] || ! nft list table inet "$TABLE" >/dev/null 2>&1; then
+	if [ -z "$(nft_bin)" ]; then
+		return 0
+	fi
+
+	# прозрачный прокси был включён (флаг переживает перезагрузку): если таблицы
+	# нет, а xray уже поднялся — вернуть правила. Это и есть «после ребута
+	# ничего не работает, пока снова не нажмёшь применить».
+	if [ -f "$ENABLED_FILE" ]; then
+		read -r eport edns < "$ENABLED_FILE" 2>/dev/null
+		[ -n "$eport" ] && PORT="$eport"
+		[ -n "$edns" ] && DNSPORT="$edns"
+
+		if ! nft list table inet "$TABLE" >/dev/null 2>&1; then
+			rm -f "$SAFE_FILE"
+			if pidof xray >/dev/null 2>&1; then
+				if start >/dev/null 2>&1; then
+					logger -t shoulderx "прозрачный прокси восстановлен после перезагрузки"
+				fi
+			fi
+			return 0
+		fi
+	fi
+
+	if ! nft list table inet "$TABLE" >/dev/null 2>&1; then
 		rm -f "$SAFE_FILE"
 		return 0
 	fi
@@ -321,6 +351,7 @@ watch() {
 		deadline=$(cat "$SAFE_FILE" 2>/dev/null)
 		now=$(date +%s)
 		if [ -n "$deadline" ] && [ "$now" -ge "$deadline" ] 2>/dev/null; then
+			rm -f "$ENABLED_FILE"
 			cleanup
 			logger -t shoulderx "авто-откат: прозрачный прокси выключен, LAN идёт напрямую"
 			return 0
@@ -333,12 +364,23 @@ watch() {
 		return 0
 	fi
 
-	# xray жив, но DNS может не отвечать — тогда LAN останется без резолва
+	# xray жив, но DNS может не отвечать — тогда LAN останется без резолва.
+	# Обратное тоже чиним: включённый прокси, но dnsmasq у провайдера (первый
+	# запуск, когда save_dns не успел) — переключаем, как только xray ответил.
 	case "$(uci -q get dhcp.@dnsmasq[0].server)" in
-		*127.0.0.1#$DNSPORT*)
+		*127.0.0.1#"$DNSPORT"*)
 			if ! nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
 				restore_dns
 				logger -t shoulderx "DNS через xray не отвечает — вернул штатный резолвер"
+			fi
+			;;
+		*)
+			# догоняем только когда xray уже отвечает: save_dns иначе ждал бы
+			# 30 секунд и тормозил cron каждую минуту
+			if [ -f "$ENABLED_FILE" ] && \
+			   nslookup -port="$DNSPORT" www.gstatic.com 127.0.0.1 >/dev/null 2>&1; then
+				save_dns >/dev/null 2>&1 && \
+					logger -t shoulderx "DNS переключён на xray (догнал после запуска)"
 			fi
 			;;
 	esac
@@ -357,12 +399,15 @@ case "$1" in
 		done
 		start "$safe"
 		;;
-	stop) cleanup; echo "выключено" ;;
+	# явный stop — больше не восстанавливать после перезагрузки
+	stop) rm -f "$ENABLED_FILE"; cleanup; echo "выключено" ;;
+	# временно снять правила, оставив флаг: сторож вернёт их, когда xray оживёт
+	pause) cleanup; echo "правила сняты, включение сохранено" ;;
 	confirm) confirm ;;
 	status) status ;;
 	watch) watch ;;
 	*)
-		echo "usage: tproxy.sh start [--safe=N] | stop | confirm | status | watch" >&2
+		echo "usage: tproxy.sh start [--safe=N] | stop | pause | confirm | status | watch" >&2
 		exit 2
 		;;
 esac

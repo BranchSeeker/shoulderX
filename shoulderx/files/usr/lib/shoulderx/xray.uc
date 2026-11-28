@@ -7,10 +7,8 @@
 //
 // Заглушка «Приложение не подходит» — два vless на 0.0.0.0:1 с нулевым uuid.
 //
-// Разделы (sections) — как секции podkop:
-//   lte  — всё в туннель, списки РКН напрямую (один балансировщик "auto");
-//   wifi — «домашний интернет»: домены из списков секций идут в их
-//          балансировщики ("yt", "eu"), остальное — напрямую.
+// Раздел (section) ровно один — как «Обход БС» в podkop:
+//   auto — всё в туннель, белый список РФ напрямую (балансировщик leastPing).
 
 'use strict';
 
@@ -18,8 +16,8 @@ const PROTOCOLS = [ "vless", "vmess", "trojan", "shadowsocks" ];
 const SKIP_TAGS = [ "direct", "block", "dns-out", "dns", "api-out" ];
 
 // Запасной список YouTube на случай, когда geo-файлов на роутере ещё нет:
-// основной путь — ext:geosite.dat:youtube, а это чтобы «домашний интернет»
-// не превращался в «всё напрямую» до первого скачивания geo.
+// основной путь — ext:geosite.dat:youtube. В «Обходе БС» YouTube уходит в
+// туннель до белого списка (см. build), поэтому набор нужен и здесь.
 const YT_DOMAINS = [
 	"domain:youtube.com", "domain:youtu.be", "domain:ytimg.com",
 	"domain:youtube-nocookie.com", "domain:googlevideo.com",
@@ -28,19 +26,8 @@ const YT_DOMAINS = [
 	"domain:youtubekids.com", "domain:youtubegaming.com"
 ];
 
-// Схемы на geo-файлах fast4g.ru:
-//   lte  — default: proxy, whitelist: direct
-//   wifi — default: direct, youtube: yt (proxy), russian-block: eu (proxy)
-//
-// PROXY_DOMAINS — запасной набор, если geo-файлов нет вовсе (wifi без geo).
-const PROXY_DOMAINS = [
-	"domain:chatgpt.com", "domain:openai.com", "domain:claude.ai", "domain:anthropic.com",
-	"domain:instagram.com", "domain:facebook.com", "domain:fbcdn.net", "domain:meta.com",
-	"domain:x.com", "domain:twitter.com", "domain:t.co", "domain:twimg.com",
-	"domain:discord.com", "domain:discordapp.com", "domain:discord.gg",
-	"domain:github.com", "domain:githubusercontent.com", "domain:githubassets.com",
-	"domain:spotify.com", "domain:netflix.com", "domain:telegram.org", "domain:t.me"
-];
+// Схема на geo-файлах fast4g.ru (одна, без режимов):
+//   default: proxy, whitelist: direct, russian-block/youtube: proxy (до whitelist)
 
 
 // lc() опускает только латиницу; кириллицу приводим сами, попарно по UTF-8
@@ -193,8 +180,7 @@ function nodes_from_text(text) {
 	return { nodes: nodes, error: "" };
 }
 // Совпадает ли узел с одним из фильтров (подстрока в имени группы, без учёта
-// регистра). Фильтры задаются в LuCI: «LTE» для обхода БС, «WiFi» для дома,
-// плюс исключения для секций yt и eu.
+// регистра). Фильтр задаётся в LuCI: «LTE» — какие группы брать в туннель.
 function matches(n, filters) {
 	for (let f in filters) {
 		f = trim("" + f);
@@ -209,71 +195,19 @@ function default_lte_filter(opts) {
 	return (opts != null && opts.lte_filter != null && length(opts.lte_filter) > 0)
 		? opts.lte_filter : [ "LTE" ];
 }
-function default_wifi_filter(opts) {
-	return (opts != null && opts.wifi_filter != null && length(opts.wifi_filter) > 0)
-		? opts.wifi_filter : [ "WiFi" ];
-}
-function default_yt_exclude(opts) {
-	return (opts != null && opts.yt_exclude != null) ? opts.yt_exclude : [];
-}
-function default_eu_exclude(opts) {
-	return (opts != null && opts.eu_exclude != null && length(opts.eu_exclude) > 0)
-		? opts.eu_exclude : [ "Россия", "Russia", "🇷🇺" ];
-}
-// mode: lte | wifi | all
-function filter_mode(nodes, mode, opts) {
-	let out = [];
+// Одна секция "auto": узлы «Обхода БС» (фильтр по имени группы), балансировщик
+// leastPing. Нет совпадений или пустой фильтр — берём все узлы подписки.
+function split_groups(nodes, opts) {
+	let picked = [];
 	for (let n in nodes) {
-		if (mode == "lte" && !matches(n, default_lte_filter(opts)))
-			continue;
-		if (mode == "wifi" && !matches(n, default_wifi_filter(opts)))
-			continue;
-		push(out, n);
+		if (matches(n, default_lte_filter(opts)))
+			push(picked, n);
 	}
-	return out;
-}
-// Группы узлов для конфига.
-//   lte  -> [ { tag: "auto", nodes } ]  (только LTE-группа, иначе все)
-//   wifi -> [ { tag: "yt", nodes }, { tag: "eu", nodes } ]  (пустые не добавляются)
-function split_groups(nodes, mode, opts) {
-	let groups = [];
-
-	if (mode == "lte") {
-		let lte_nodes = filter_mode(nodes, "lte", opts);
-		if (length(lte_nodes) == 0)
-			lte_nodes = nodes;
-		if (length(lte_nodes) == 0)
-			return groups;
-		push(groups, { tag: "auto", nodes: lte_nodes });
-		return groups;
-	}
-
-	let wifi_nodes = filter_mode(nodes, "wifi", opts);
-	if (length(wifi_nodes) == 0)
-		wifi_nodes = nodes;
-
-	// WiFi-режим: обе секции — WiFi-узлы за вычетом своих исключений.
-	//   yt: исключения из опции yt_exclude (по умолчанию пусто)
-	//   eu: исключения из опции eu_exclude (по умолчанию Россия)
-	let yx = default_yt_exclude(opts);
-	let ex = default_eu_exclude(opts);
-	let yt_nodes = [], eu_nodes = [];
-	for (let n in wifi_nodes) {
-		if (!matches(n, yx))
-			push(yt_nodes, n);
-		if (!matches(n, ex))
-			push(eu_nodes, n);
-	}
-	if (length(yt_nodes) == 0)
-		yt_nodes = wifi_nodes;
-	if (length(eu_nodes) == 0)
-		eu_nodes = wifi_nodes;
-
-	if (length(yt_nodes) > 0)
-		push(groups, { tag: "yt", nodes: yt_nodes });
-	if (length(eu_nodes) > 0)
-		push(groups, { tag: "eu", nodes: eu_nodes });
-	return groups;
+	if (length(picked) == 0)
+		picked = nodes;
+	if (length(picked) == 0)
+		return [];
+	return [ { tag: "auto", nodes: picked } ];
 }
 // Цель правила: балансировщик группы, если узлов больше одного, иначе outbound.
 function target_for(g) {
@@ -284,10 +218,8 @@ function target_for(g) {
 // build(opts) -> { config, nodes, sections, error }
 //
 // opts:
-//   groups     — [ { tag, nodes, domains } ]; domains есть только у wifi-секций
-//   mode       — "lte" | "wifi"
-//   rkn        — { domains, ips } для lte-режима
-//   socks_port, http_port, log_level
+//   groups     — [ { tag: "auto", nodes } ]
+//   socks_port, http_port, api_port, tproxy_port, dns_port, log_level
 function build(opts) {
 	let groups = opts.groups || [];
 	if (length(groups) == 0)
@@ -323,10 +255,8 @@ function build(opts) {
 	push(outs, { tag: "direct", protocol: "freedom", settings: {} });
 	push(outs, { tag: "block", protocol: "blackhole", settings: {} });
 
-	// Схемы маршрутизации на geo-файлах fast4g.ru:
-	//   lte  («обход БС»):  напрямую только whitelist/private, всё остальное — в туннель
-	//   wifi («домашний»):  по умолчанию напрямую; youtube -> секция yt,
-	//                       russian-block (заблокированное в РФ) -> секция eu
+	// Схема маршрутизации на geo-файлах fast4g.ru — одна, «Обход БС»:
+	// напрямую только whitelist/private, всё остальное — в туннель.
 	let rules = [];
 	let geo = (opts.geo === true);
 	let geo_site = (opts.geo_site != null) ? opts.geo_site : "geosite.dat";
@@ -342,24 +272,16 @@ function build(opts) {
 		return r;
 	};
 
-	let ytg = null, eug = null, autog = null;
+	let autog = null;
 	for (let g in groups) {
-		if (g.tag == "yt")
-			ytg = g;
-		else if (g.tag == "eu")
-			eug = g;
-		else if (g.tag == "auto")
+		if (g.tag == "auto")
 			autog = g;
 	}
 
 	// DNS-запросы из dns-in всегда через туннель: провайдер перехватывает 53-й
 	// порт и на заблокированное отдаёт NXDOMAIN — с «прямым» DNS YouTube не
 	// открывается вовсе.
-	let dns_group = null;
-	if (opts.mode == "lte")
-		dns_group = autog;
-	else
-		dns_group = (eug != null) ? eug : autog;
+	let dns_group = autog;
 	if (geo && dns_group != null) {
 		let dr = target_rule(target_for(dns_group));
 		dr.inboundTag = [ "dns-in" ];
@@ -381,53 +303,23 @@ function build(opts) {
 		push(rules, r2);
 	};
 
-	if (opts.mode == "lte") {
-		// обход БС: напрямую только белый список, остальное — в туннель.
-		// Заблокированное в РФ — явно в туннель ДО белого списка: домены
-		// вроде chatgpt.com живут на Cloudflare, чьи адреса есть в geoip:WHITELIST,
-		// и без этого правила уходили напрямую (403).
-		if (geo && autog != null) {
-			let pr = target_rule(target_for(autog));
-			pr.domain = [ site("RUSSIAN-BLOCK"), site("YOUTUBE") ];
-			for (let d in YT_DOMAINS)
-				push(pr.domain, d);
-			push(rules, pr);
-		}
-		push_direct();
-		if (autog != null) {
-			let r = target_rule(target_for(autog));
-			r.network = "tcp,udp";
-			push(rules, r);
-		} else {
-			push(rules, { type: "field", network: "tcp,udp", outboundTag: "direct" });
-		}
+	// Обход БС: напрямую только белый список, остальное — в туннель.
+	// Заблокированное в РФ — явно в туннель ДО белого списка: домены
+	// вроде chatgpt.com живут на Cloudflare, чьи адреса есть в geoip:WHITELIST,
+	// и без этого правила уходили напрямую (403).
+	if (geo && autog != null) {
+		let pr = target_rule(target_for(autog));
+		pr.domain = [ site("RUSSIAN-BLOCK"), site("YOUTUBE") ];
+		for (let d in YT_DOMAINS)
+			push(pr.domain, d);
+		push(rules, pr);
+	}
+	push_direct();
+	if (autog != null) {
+		let r = target_rule(target_for(autog));
+		r.network = "tcp,udp";
+		push(rules, r);
 	} else {
-		// домашний интернет: youtube -> yt, заблокированное в РФ -> eu, остальное напрямую
-		if (ytg != null) {
-			let r1 = target_rule(target_for(ytg));
-			r1.domain = geo ? [ site("YOUTUBE") ] : YT_DOMAINS;
-			push(rules, r1);
-			if (geo) {
-				let r2 = target_rule(target_for(ytg));
-				r2.ip = [ ipt("YOUTUBE") ];
-				push(rules, r2);
-			}
-		}
-		push_direct();
-		if (eug != null) {
-			if (geo) {
-				let r1 = target_rule(target_for(eug));
-				r1.domain = [ site("RUSSIAN-BLOCK") ];
-				push(rules, r1);
-				let r2 = target_rule(target_for(eug));
-				r2.ip = [ ipt("RUSSIAN-BLOCK") ];
-				push(rules, r2);
-			} else {
-				let r1 = target_rule(target_for(eug));
-				r1.domain = PROXY_DOMAINS;
-				push(rules, r1);
-			}
-		}
 		push(rules, { type: "field", network: "tcp,udp", outboundTag: "direct" });
 	}
 
@@ -527,7 +419,6 @@ function build(opts) {
 return {
 	nodes_from_text: nodes_from_text,
 	configs_from: configs,
-	filter_mode: filter_mode,
 	split_groups: split_groups,
 	build: build,
 	endpoint: endpoint,

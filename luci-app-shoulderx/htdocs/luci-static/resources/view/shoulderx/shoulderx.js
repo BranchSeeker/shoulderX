@@ -6,9 +6,9 @@
 'require ui';
 'require dom';
 
-// ShoulderX — одна страница: подписка и режим, плитки серверов с пинг-тестом,
+// ShoulderX — одна страница: подписка, плитки серверов с пинг-тестом,
 // кнопки автозапуска/старта сервиса, форма настроек, тест сервисов и
-// диагностика под спойлером.
+// диагностика под спойлером. Режим один — «Обход БС».
 //
 // «Обновить подписку» — сохраняет настройки, тянет подписку и пересобирает
 // /etc/xray/config.json (серверы, которых больше нет в подписке, исчезают).
@@ -17,17 +17,8 @@
 // «проверяю…», через небольшую задержку запрашивается состояние (симлинк в
 // /etc/rc.d + pidof xray) и кнопки перерисовываются по факту.
 
-var MODE_LTE = 'lte';
-var MODE_WIFI = 'wifi';
-
-
-
 function errText(e) {
 	return (e && e.message) ? e.message : String(e);
-}
-
-function modeName(m) {
-	return (m === MODE_WIFI) ? _('домашний интернет') : _('обход БС');
 }
 
 function run(argv) {
@@ -74,7 +65,7 @@ function routeText(route) {
 
 // Результаты проверки сервисов — карточками, а не таблицей: на телефоне
 // таблица из шести колонок разваливается в нечитаемую стопку.
-function checkCard(r, mode) {
+function checkCard(r) {
 	var color = r.ok ? '#2e7d32' : '#b00020';
 
 	return E('div', {
@@ -89,14 +80,10 @@ function checkCard(r, mode) {
 		E('div', { 'style': 'font-size:11px;margin-top:3px' },
 			_('маршрут: ') + routeText(r.route) +
 			((r.group === 'ru' && r.route === 'tunnel')
-				? ' ⚠ ' + (mode === 'lte'
-					? _('РФ-сервис идёт в туннель — добавь его в «Списки доменов напрямую»')
-					: _('РФ-сервис уходит в туннель — убери russia_inside из списков секции eu'))
+				? ' ⚠ ' + _('РФ-сервис идёт в туннель — он должен быть в geo-списке whitelist')
 				: '') +
 			((r.group === 'proxy' && r.route === 'direct')
-				? ' ⚠ ' + (mode === 'lte'
-					? _('идёт напрямую — добавь список в «Списки в туннель»')
-					: _('идёт напрямую — добавь список в секцию yt или eu'))
+				? ' ⚠ ' + _('идёт напрямую — добавь его в geo-список заблокированных')
 				: '')),
 		// РФ-сервисы через туннель не проверяем — показываем только прямой путь
 		E('div', { 'style': 'font-size:11px' },
@@ -113,7 +100,7 @@ function checkTable(d) {
 		return E('p', {}, _('Нет данных'));
 
 	var cards = [];
-	rows.forEach(function (r) { cards.push(checkCard(r, d.mode)); });
+	rows.forEach(function (r) { cards.push(checkCard(r)); });
 
 	return E('div', {}, [
 		E('p', { 'style': 'margin:6px 0' },
@@ -164,12 +151,10 @@ function statusText(st) {
 		return _('Данных пока нет — нажмите «Обновить подписку».');
 
 	var lines = [];
-	lines.push(_('Режим: ') + modeName(st.mode));
 	lines.push(_('Узлов в конфиге: ') + (st.nodes || 0));
 	if (st.sections && st.sections.length) {
 		st.sections.forEach(function (s) {
-			lines.push('  ' + s.tag + ': ' + s.nodes + ' ' + _('узлов') + ', ' +
-				s.domains + ' ' + _('доменов'));
+			lines.push('  ' + s.tag + ': ' + s.nodes + ' ' + _('узлов'));
 		});
 	}
 	if (st.added && st.added.length)
@@ -335,7 +320,7 @@ return view.extend({
 		});
 	},
 
-	// Значения виджетов читаем напрямую: mode и фильтры групп узлов.
+	// Значения виджетов читаем напрямую: фильтр групп узлов и ссылки подписки.
 	// Штатный футер LuCI («Сохранить» / «Сохранить и применить») не нужен:
 	// всё делает кнопка «Обновить подписку и применить».
 	hideFooter: function () {
@@ -345,20 +330,6 @@ return view.extend({
 		var f = node.querySelectorAll('.cbi-page-actions');
 		for (var i = 0; i < f.length; i++)
 			f[i].style.display = 'none';
-	},
-
-	// Значение селекта режима берём прямо из DOM: LuCI отдаёт formvalue из своего
-	// кэша uci, который на этой сборке не обновляется — из-за этого кнопка
-	// применяла прежний режим.
-	modeFromDom: function () {
-		var sel = document.querySelectorAll('#shoulderx-form select');
-		for (var i = 0; i < sel.length; i++) {
-			for (var j = 0; j < sel[i].options.length; j++) {
-				if (sel[i].options[j].value === 'lte')
-					return sel[i].value;
-			}
-		}
-		return null;
 	},
 
 	// Все текстовые поля строки, чей заголовок начинается с title
@@ -388,15 +359,6 @@ return view.extend({
 		var self = this;
 		var args = [ 'apply' ];
 
-		var mode = this.modeFromDom();
-		if (!mode) {
-			try {
-				var o = self.map.lookupOption('mode', 'settings');
-				mode = o ? o.formvalue('settings') : null;
-			} catch (e) { mode = null; }
-		}
-		if (mode) args.push('--mode=' + (Array.isArray(mode) ? mode[0] : mode));
-
 		// ссылки подписки — тоже из формы: иначе первое добавление (когда в uci
 		// пусто) уходило в apply без адреса и падало
 		var subs = this.fieldValues('Ссылки подписки');
@@ -414,8 +376,7 @@ return view.extend({
 				args.push('--url=' + subs[i]);
 		}
 
-		[ [ 'Обход БС: группы узлов', '--lte-filter=' ],
-		  [ 'Домашний интернет: группы узлов', '--wifi-filter=' ] ].forEach(function (p) {
+		[ [ 'Обход БС: группы узлов', '--lte-filter=' ] ].forEach(function (p) {
 			var v = self.fieldValues(p[0]);
 			if (v && v.length) args.push(p[1] + v.join(','));
 		});
@@ -508,10 +469,7 @@ return view.extend({
 
 
 	refreshAll: function () {
-		var self = this;
-		return Promise.all([ this.refreshStatus(), this.refreshNodes(), this.refreshService() ]).then(function () {
-			self.refreshWarning();
-		});
+		return Promise.all([ this.refreshStatus(), this.refreshNodes(), this.refreshService() ]);
 	},
 
 	refreshStatus: function () {
@@ -547,34 +505,13 @@ return view.extend({
 		});
 	},
 
-	// Конфиг мог быть собран в другом режиме, чем выбран сейчас — предупреждаем.
-	refreshWarning: function () {
-		var node = document.getElementById('shoulderx-warn');
-		if (!node)
-			return;
-
-		return runLoose([ 'status', '--json' ]).then(function (r) {
-			var st = {};
-			try { st = JSON.parse(r.stdout || '{}'); } catch (e) {}
-			var uciMode = uci.get('shoulderx', 'settings', 'mode') || MODE_LTE;
-			node.innerHTML = '';
-			if (st.mode && st.mode !== uciMode) {
-				node.appendChild(E('p', {
-					'style': 'color:#b00020;font-weight:bold;margin:0 0 6px'
-				}, _('Конфиг собран в режиме «') + modeName(st.mode) +
-				   _('», а выбран «') + modeName(uciMode) +
-				   _('» — нажмите «Обновить подписку».')));
-			}
-		});
-	},
-
 	render: function (data) {
 		var st = data[1] || {};
 		var nd = data[2] || {};
 		var m, s, o;
 
 		m = new form.Map('shoulderx', 'ShoulderX',
-			_('Собирает конфиг Xray из подписки. Режим «Обход БС» — весь трафик в туннель, списки РКН напрямую; «Домашний интернет» — в туннель идут только домены секций yt и eu.'));
+			_('Собирает конфиг Xray из подписки: весь LAN в туннель, белый список РФ — напрямую.'));
 
 		this.map = m;
 
@@ -586,30 +523,14 @@ return view.extend({
 		o.placeholder = 'https://sub.example.com/TOKEN';
 		o.rmempty = false;
 
-		o = s.option(form.ListValue, 'mode', _('Режим'),
-			_('Меняется конфиг целиком: секции и правила собираются заново. После смены нажмите «Обновить подписку».'));
-		// Номера в подписях держат порядок: LuCI сортирует варианты по тексту.
-		o.value(MODE_LTE, _('1) Обход БС (lte) — весь LAN в туннель, списки РКН напрямую'));
-		o.value(MODE_WIFI, _('2) Домашний интернет (wifi) — секции yt / eu в туннель, остальное напрямую'));
-		o.default = MODE_LTE;
-
-
-		o = s.option(form.Value, 'lte_filter', _('Обход БС: группы узлов'),
-			_('Подстрока в имени группы, регистр не важен. По умолчанию «LTE» — в туннель идут только LTE-узлы.'));
+		o = s.option(form.Value, 'lte_filter', _('Группы узлов в туннель'),
+			_('Подстрока в имени группы, регистр не важен. По умолчанию «LTE»: в туннель идут только LTE-узлы. Совпадений нет — берутся все узлы подписки.'));
 		o.placeholder = 'LTE';
 		o.default = 'LTE';
-		o.depends('mode', MODE_LTE);
 
 
-		o = s.option(form.Value, 'wifi_filter', _('Домашний интернет: группы узлов'),
-			_('Подстрока в имени группы WiFi-узлов. По умолчанию «WiFi».'));
-		o.placeholder = 'WiFi';
-		o.default = 'WiFi';
-		o.depends('mode', MODE_WIFI);
-
-
-		// Кнопка — именно опцией формы: LuCI перерисовывает строки при смене
-		// режима, и вставленный вручную DOM-элемент из строки пропадал.
+		// Кнопка — именно опцией формы: вставленный вручную DOM-элемент
+		// из строки формы пропадал при перерисовке.
 		var self = this;
 		o = s.option(form.Button, '_apply_btn', ' ');
 		o.inputtitle = _('Обновить подписку и применить');
@@ -703,7 +624,6 @@ return view.extend({
 			window.setTimeout(function () {
 				this.hideFooter();
 				this.refreshService();
-				this.refreshWarning();
 			}.bind(this), 400);
 
 			return root;
@@ -718,36 +638,5 @@ return view.extend({
 		var footers = this.mapNode.querySelectorAll('.cbi-page-actions');
 		for (var i = 0; i < footers.length; i++)
 			footers[i].style.display = 'none';
-	},
-
-	// Перенос кнопки «Обновить подписку» в строку селекта «Режим».
-	// Ищем именно тот select, у которого есть option со значением lte —
-	// так не зависим от внутренних id LuCI.
-	moveApplyButton: function () {
-		var holder = document.getElementById('shoulderx-apply-holder');
-		if (!holder)
-			return;
-
-		var selects = document.querySelectorAll('select');
-		for (var i = 0; i < selects.length; i++) {
-			var sel = selects[i];
-			var isMode = false;
-			for (var j = 0; j < sel.options.length; j++) {
-				if (sel.options[j].value === MODE_LTE) {
-					isMode = true;
-					break;
-				}
-			}
-			if (!isMode)
-				continue;
-
-			var row = sel.closest ? sel.closest('.cbi-value') : null;
-			var field = row ? row.querySelector('.cbi-value-field') : null;
-			if (field) {
-				holder.style.marginLeft = '8px';
-				field.appendChild(holder);
-				return;
-			}
-		}
 	}
 });
